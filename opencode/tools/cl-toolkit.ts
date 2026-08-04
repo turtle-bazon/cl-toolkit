@@ -100,13 +100,13 @@ export default tool({
       if (code) {
         cmdArgs.push("--code", code)
       } else if (absolutePath) {
-        cmdArgs.push(absolutePath)
+        cmdArgs.push("--file", absolutePath)
       } else {
         return JSON.stringify({ error: "Provide either code or filePath for parse command" })
       }
     } else if (command === "validate") {
       if (absolutePath) {
-        cmdArgs.push(absolutePath)
+        cmdArgs.push("--file", absolutePath)
       } else {
         return JSON.stringify({ error: "Provide filePath for validate command" })
       }
@@ -114,15 +114,15 @@ export default tool({
       if (!absolutePath || line === undefined || col === undefined) {
         return JSON.stringify({ error: "find command requires filePath, line, and col" })
       }
-      cmdArgs.push(absolutePath, String(line), String(col))
+      cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col))
     } else if (command === "extract") {
       if (!absolutePath || line1 === undefined || col1 === undefined || line2 === undefined || col2 === undefined) {
         return JSON.stringify({ error: "extract command requires filePath, line1, col1, line2, col2" })
       }
-      cmdArgs.push(absolutePath, String(line1), String(col1), String(line2), String(col2))
+      cmdArgs.push("--file", absolutePath, "--line1", String(line1), "--col1", String(col1), "--line2", String(line2), "--col2", String(col2))
     } else if (command === "top-level") {
       if (absolutePath) {
-        cmdArgs.push(absolutePath)
+        cmdArgs.push("--file", absolutePath)
       } else {
         return JSON.stringify({ error: "Provide filePath for top-level command" })
       }
@@ -133,9 +133,9 @@ export default tool({
       if (write) cmdArgs.push("--write")
       if (recovery) cmdArgs.push("--recovery")
       if (index !== undefined) {
-        cmdArgs.push(absolutePath, "--index", String(index))
+        cmdArgs.push("--file", absolutePath, "--index", String(index))
       } else if (line !== undefined && col !== undefined) {
-        cmdArgs.push(absolutePath, String(line), String(col))
+        cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col))
       } else {
         return JSON.stringify({ error: "delete command requires line/col or index" })
       }
@@ -148,7 +148,7 @@ export default tool({
       if (validate) cmdArgs.push("--validate")
       if (after) cmdArgs.push("--after")
       if (line !== undefined && col !== undefined && code) {
-        cmdArgs.push(absolutePath, String(line), String(col), code)
+        cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--code", code)
       } else {
         return JSON.stringify({ error: "insert command requires line, col, and code" })
       }
@@ -158,17 +158,17 @@ export default tool({
       }
       if (write) cmdArgs.push("--write")
       if (recovery) cmdArgs.push("--recovery")
-      cmdArgs.push(absolutePath, String(line), String(col), code)
+      cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--code", code)
     } else if (command === "move") {
       if (!absolutePath || line1 === undefined || col1 === undefined || line2 === undefined || col2 === undefined) {
         return JSON.stringify({ error: "move command requires filePath, line1, col1, line2, col2" })
       }
       if (write) cmdArgs.push("--write")
       if (recovery) cmdArgs.push("--recovery")
-      cmdArgs.push(absolutePath, String(line1), String(col1), String(line2), String(col2))
+      cmdArgs.push("--file", absolutePath, "--from-line", String(line1), "--from-col", String(col1), "--to-line", String(line2), "--to-col", String(col2))
     } else if (command === "balance") {
       if (absolutePath) {
-        cmdArgs.push(absolutePath)
+        cmdArgs.push("--file", absolutePath)
       } else if (code) {
         cmdArgs.push("--code", code)
       } else {
@@ -176,7 +176,7 @@ export default tool({
       }
     } else if (command === "format") {
       if (absolutePath) {
-        cmdArgs.push(absolutePath)
+        cmdArgs.push("--file", absolutePath)
       } else if (code) {
         cmdArgs.push("--code", code)
       } else {
