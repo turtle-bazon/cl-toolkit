@@ -91,9 +91,22 @@ Binary is built automatically on first use.
 
 ### Per-Project Setup
 
+Linux/macOS:
 ```bash
 cd /path/to/your/project
 ~/cl-toolkit/setup.sh .opencode
+```
+
+Windows (PowerShell):
+```powershell
+cd C:\path\to\your\project
+C:\cl-toolkit\setup.ps1 .opencode
+```
+
+Cross-platform (Node.js):
+```bash
+cd /path/to/your/project
+node ~/cl-toolkit/setup.js .opencode
 ```
 
 ### Agent Usage
