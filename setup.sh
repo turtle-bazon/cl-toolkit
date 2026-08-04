@@ -14,7 +14,7 @@ echo "Installing opencode plugin..."
 cp "$SCRIPT_DIR/opencode/tools/cl-toolkit.ts" "$TARGET_DIR/tools/"
 
 # Update the binary path to be absolute
-sed -i "s|path.resolve(__dirname, \"../../lisp/build/cl-toolkit\")|\"$SCRIPT_DIR/lisp/build/cl-toolkit\"|" "$TARGET_DIR/tools/cl-toolkit.ts"
+sed -i "s|path.resolve(__dirname, \"../../lisp/build/cl-toolkit\")|\"$SCRIPT_DIR/build/cl-toolkit\"|" "$TARGET_DIR/tools/cl-toolkit.ts"
 
 echo ""
 echo "Setup complete!"

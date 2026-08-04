@@ -19,11 +19,10 @@ Lisp code toolkit for structural analysis and editing.
 ## Build
 
 ```bash
-cd lisp
 make build
 ```
 
-Produces `lisp/build/cl-toolkit`.
+Produces `build/cl-toolkit`.
 
 ## Usage
 
@@ -73,7 +72,7 @@ mkdir -p ~/.config/opencode/tools
 cp ~/cl-toolkit/opencode/tools/cl-toolkit.ts ~/.config/opencode/tools/
 
 # 3. Update plugin to use repo path
-sed -i 's|path.resolve(__dirname, "../../lisp/build/cl-toolkit")|path.resolve(process.env.HOME, "cl-toolkit/lisp/build/cl-toolkit")|' ~/.config/opencode/tools/cl-toolkit.ts
+sed -i 's|path.resolve(__dirname, "../../build/cl-toolkit")|path.resolve(process.env.HOME, "cl-toolkit/build/cl-toolkit")|' ~/.config/opencode/tools/cl-toolkit.ts
 
 # 4. Add to opencode config
 mkdir -p ~/.config/opencode
@@ -129,6 +128,28 @@ Example prompts:
 | `format` | Reformat source with consistent indentation | `--file` or `--code` |
 
 Optional flags: `--recovery` (error recovery), `--write` (in-place edit), `--validate` (validate inserted code)
+
+## Project Structure
+
+```
+cl-toolkit/
+├── cl-toolkit.asd      # ASDF system definition
+├── Makefile            # Build targets
+├── setup.sh            # Setup script
+├── README.md
+├── src/                # Source files
+│   ├── packages.lisp
+│   ├── ast.lisp
+│   ├── grammar.lisp
+│   ├── parser.lisp
+│   └── cli.lisp
+├── test/               # Tests
+│   ├── cl-toolkit-tests.asd
+│   └── tests.lisp
+└── opencode/           # Opencode plugin
+    └── tools/
+        └── cl-toolkit.ts
+```
 
 ## License
 

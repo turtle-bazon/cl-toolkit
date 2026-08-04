@@ -3,8 +3,8 @@ import { execFileSync } from "child_process"
 import { readFileSync, existsSync } from "fs"
 import path from "path"
 
-const CL_TOOLKIT_PATH = path.resolve(__dirname, "../../lisp/build/cl-toolkit")
-const LISP_DIR = path.resolve(__dirname, "../../lisp")
+const CL_TOOLKIT_PATH = path.resolve(__dirname, "../../build/cl-toolkit")
+const REPO_DIR = path.resolve(__dirname, "../..")
 
 function ensureBinary(): void {
   if (existsSync(CL_TOOLKIT_PATH)) {
@@ -12,7 +12,7 @@ function ensureBinary(): void {
   }
   console.log("cl-toolkit binary not found, building...")
   execFileSync("make", ["build"], {
-    cwd: LISP_DIR,
+    cwd: REPO_DIR,
     timeout: 120000,
     stdio: "inherit",
   })
