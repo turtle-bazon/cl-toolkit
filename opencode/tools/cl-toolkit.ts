@@ -3,6 +3,36 @@ import { execFileSync } from "child_process"
 import { readFileSync, existsSync } from "fs"
 import path from "path"
 
+function generateDiff(original: string, modified: string, filePath: string): string {
+  const originalLines = original.split('\n')
+  const modifiedLines = modified.split('\n')
+  const diff: string[] = []
+  
+  let i = 0, j = 0
+  while (i < originalLines.length || j < modifiedLines.length) {
+    if (i < originalLines.length && j < modifiedLines.length) {
+      if (originalLines[i] === modifiedLines[j]) {
+        diff.push(`  ${originalLines[i]}`)
+        i++
+        j++
+      } else {
+        diff.push(`- ${originalLines[i]}`)
+        diff.push(`+ ${modifiedLines[j]}`)
+        i++
+        j++
+      }
+    } else if (i < originalLines.length) {
+      diff.push(`- ${originalLines[i]}`)
+      i++
+    } else {
+      diff.push(`+ ${modifiedLines[j]}`)
+      j++
+    }
+  }
+  
+  return diff.join('\n')
+}
+
 const CL_TOOLKIT_PATH = path.resolve(__dirname, "../../build/cl-toolkit")
 const REPO_DIR = path.resolve(__dirname, "../..")  // Updated by setup.sh
 
@@ -224,9 +254,19 @@ export default tool({
       // Handle modification commands
       if (["delete", "insert", "replace", "move"].includes(command)) {
         if (result.success) {
+          let diff = ""
+          if (absolutePath) {
+            try {
+              const original = readFileSync(absolutePath, "utf-8")
+              diff = generateDiff(original, result.source, absolutePath)
+            } catch (e) {
+              // If we can't read the original, just show the new source
+            }
+          }
           return JSON.stringify({
             success: true,
             source: result.source,
+            diff: diff || undefined,
             _summary: `${command} command completed successfully`,
           })
         } else {
