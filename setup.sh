@@ -1,0 +1,22 @@
+#!/bin/bash
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TARGET_DIR="${1:-.opencode}"
+
+echo "Setting up cl-toolkit..."
+
+# Create opencode tools directory
+mkdir -p "$TARGET_DIR/tools"
+
+# Copy the plugin
+echo "Installing opencode plugin..."
+cp "$SCRIPT_DIR/opencode/tools/cl-toolkit.ts" "$TARGET_DIR/tools/"
+
+# Update the binary path to be absolute
+sed -i "s|path.resolve(__dirname, \"../../lisp/build/cl-toolkit\")|\"$SCRIPT_DIR/lisp/build/cl-toolkit\"|" "$TARGET_DIR/tools/cl-toolkit.ts"
+
+echo ""
+echo "Setup complete!"
+echo "  Plugin: $TARGET_DIR/tools/cl-toolkit.ts"
+echo "  Binary will be built automatically on first use."

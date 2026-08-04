@@ -1,0 +1,6 @@
+# Build artifacts
+lisp/build/
+*.fasl
+*.dx64fsl
+*.lx64fsl
+.cache/
