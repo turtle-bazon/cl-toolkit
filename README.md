@@ -76,11 +76,11 @@ sed -i 's|path.resolve(__dirname, "../../build/cl-toolkit")|path.resolve(process
 
 # 4. Add to opencode config
 mkdir -p ~/.config/opencode
-cat > ~/.config/opencode/opencode.json << 'EOF'
+cat > ~/.config/opencode/opencode.json << EOF
 {
   "tools": {
     "cl-toolkit": {
-      "path": "~/.config/opencode/tools/cl-toolkit.ts"
+      "path": "\$HOME/.config/opencode/tools/cl-toolkit.ts"
     }
   }
 }
