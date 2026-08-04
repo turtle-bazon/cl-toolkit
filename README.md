@@ -142,13 +142,22 @@ Example prompts:
 
 Optional flags: `--recovery` (error recovery), `--write` (in-place edit), `--validate` (validate inserted code)
 
+## Requirements
+
+- SBCL (Steel Bank Common Lisp)
+- Quicklisp
+- Make (for `make build`)
+- Node.js (for cross-platform setup and opencode)
+
 ## Project Structure
 
 ```
 cl-toolkit/
 ├── cl-toolkit.asd      # ASDF system definition
 ├── Makefile            # Build targets
-├── setup.sh            # Setup script
+├── setup.sh            # Setup script (Linux/macOS)
+├── setup.ps1           # Setup script (Windows PowerShell)
+├── setup.js            # Setup script (Cross-platform Node.js)
 ├── README.md
 ├── src/                # Source files
 │   ├── packages.lisp
