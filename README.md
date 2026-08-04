@@ -72,15 +72,15 @@ mkdir -p ~/.config/opencode/tools
 cp ~/cl-toolkit/opencode/tools/cl-toolkit.ts ~/.config/opencode/tools/
 
 # 3. Update plugin to use repo path
-sed -i 's|path.resolve(__dirname, "../../build/cl-toolkit")|path.resolve(process.env.HOME, "cl-toolkit/build/cl-toolkit")|' ~/.config/opencode/tools/cl-toolkit.ts
+sed -i "s|path.resolve(__dirname, \"../../build/cl-toolkit\")|\"$HOME/cl-toolkit/build/cl-toolkit\"|" ~/.config/opencode/tools/cl-toolkit.ts
 
-# 4. Add to opencode config
+# 4. Add to opencode config (path is expanded during creation)
 mkdir -p ~/.config/opencode
 cat > ~/.config/opencode/opencode.json << EOF
 {
   "tools": {
     "cl-toolkit": {
-      "path": "\$HOME/.config/opencode/tools/cl-toolkit.ts"
+      "path": "${HOME}/.config/opencode/tools/cl-toolkit.ts"
     }
   }
 }
