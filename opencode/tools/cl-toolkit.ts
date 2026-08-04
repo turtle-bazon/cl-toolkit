@@ -4,7 +4,7 @@ import { readFileSync, existsSync } from "fs"
 import path from "path"
 
 const CL_TOOLKIT_PATH = path.resolve(__dirname, "../../build/cl-toolkit")
-const REPO_DIR = path.resolve(__dirname, "../..")
+const REPO_DIR = path.resolve(__dirname, "../..")  // Updated by setup.sh
 
 function ensureBinary(): void {
   if (existsSync(CL_TOOLKIT_PATH)) {
