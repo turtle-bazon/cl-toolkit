@@ -6,9 +6,18 @@ import path from "path"
 function generateDiff(original: string, modified: string, filePath: string): string {
   const originalLines = original.split('\n')
   const modifiedLines = modified.split('\n')
-  const diff: string[] = []
   
+  // Remove trailing empty lines from both
+  while (originalLines.length > 0 && originalLines[originalLines.length - 1] === '') {
+    originalLines.pop()
+  }
+  while (modifiedLines.length > 0 && modifiedLines[modifiedLines.length - 1] === '') {
+    modifiedLines.pop()
+  }
+  
+  const diff: string[] = []
   let i = 0, j = 0
+  
   while (i < originalLines.length || j < modifiedLines.length) {
     if (i < originalLines.length && j < modifiedLines.length) {
       if (originalLines[i] === modifiedLines[j]) {
@@ -16,10 +25,25 @@ function generateDiff(original: string, modified: string, filePath: string): str
         i++
         j++
       } else {
-        diff.push(`- ${originalLines[i]}`)
-        diff.push(`+ ${modifiedLines[j]}`)
-        i++
-        j++
+        const originalInModified = modifiedLines.indexOf(originalLines[i], j)
+        const modifiedInOriginal = originalLines.indexOf(modifiedLines[j], i)
+        
+        if (originalInModified === -1 && modifiedInOriginal === -1) {
+          diff.push(`- ${originalLines[i]}`)
+          diff.push(`+ ${modifiedLines[j]}`)
+          i++
+          j++
+        } else if (originalInModified !== -1 && (modifiedInOriginal === -1 || originalInModified < modifiedInOriginal)) {
+          while (j < originalInModified) {
+            diff.push(`+ ${modifiedLines[j]}`)
+            j++
+          }
+        } else {
+          while (i < modifiedInOriginal) {
+            diff.push(`- ${originalLines[i]}`)
+            i++
+          }
+        }
       }
     } else if (i < originalLines.length) {
       diff.push(`- ${originalLines[i]}`)
@@ -118,6 +142,16 @@ export default tool({
     let absolutePath: string | undefined
     if (filePath) {
       absolutePath = path.resolve(context.worktree, filePath)
+    }
+
+    // Read original file for diff generation (modification commands only)
+    let originalSource: string | undefined
+    if (absolutePath && ["delete", "insert", "replace", "move", "format"].includes(command)) {
+      try {
+        originalSource = readFileSync(absolutePath, "utf-8")
+      } catch (e) {
+        // File might not exist yet
+      }
     }
 
     // Build command arguments
@@ -255,13 +289,8 @@ export default tool({
       if (["delete", "insert", "replace", "move"].includes(command)) {
         if (result.success) {
           let diff = ""
-          if (absolutePath) {
-            try {
-              const original = readFileSync(absolutePath, "utf-8")
-              diff = generateDiff(original, result.source, absolutePath)
-            } catch (e) {
-              // If we can't read the original, just show the new source
-            }
+          if (originalSource) {
+            diff = generateDiff(originalSource, result.source, absolutePath || "file")
           }
           return JSON.stringify({
             success: true,
@@ -292,8 +321,13 @@ export default tool({
 
       // Handle format command
       if (command === "format") {
+        let diff = ""
+        if (originalSource) {
+          diff = generateDiff(originalSource, result, absolutePath || "file")
+        }
         return JSON.stringify({
           source: result,
+          diff: diff || undefined,
           _summary: "Code reformatted",
         })
       }
