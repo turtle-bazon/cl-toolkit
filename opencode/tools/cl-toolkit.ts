@@ -242,6 +242,7 @@ export default tool({
     } else if (command === "format") {
       if (absolutePath) {
         cmdArgs.push("--file", absolutePath)
+        if (write) cmdArgs.push("--write")
       } else if (code) {
         cmdArgs.push("--code", code)
       } else {
