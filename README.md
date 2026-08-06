@@ -142,6 +142,37 @@ Example prompts:
 
 Optional flags: `--recovery` (error recovery), `--write` (in-place edit), `--validate` (validate inserted code)
 
+## Editing Workflow
+
+`insert` and `replace` have different semantics:
+
+- **`insert`** adds a new top-level form at the given position. It cannot insert code inside an existing form body.
+- **`replace`** replaces the form containing the given line/col, including nested subforms.
+
+### Modifying Existing Code
+
+To add new functionality to an existing file:
+
+1. **Add helper functions** as new top-level forms:
+   ```bash
+   cl-toolkit insert --file evaluator.lisp --line 11 --col 3 \
+     --code "(defun new-helper (x) ...)" --write
+   ```
+
+2. **Replace existing forms** with modified versions:
+   ```bash
+   cl-toolkit replace --file evaluator.lisp --line 20 --col 3 \
+     --code "(defun dispatch-token (tok) ...)" --write
+   ```
+
+3. **Replace nested subforms** — point to any line/col inside the target:
+   ```bash
+   cl-toolkit replace --file evaluator.lisp --line 25 --col 5 \
+     --code "(* 5 6)" --write
+   ```
+
+Both commands output JSON with the modified source. Use `--write` for in-place editing (creates `.bak` backup).
+
 ## Requirements
 
 - SBCL (Steel Bank Common Lisp)
