@@ -376,16 +376,18 @@
                             (char= (char text (1+ i)) #\\))
                        (incf i)  ; skip the \, now i points to char after \
                        (incf col)
-                       ;; Skip character literal name
-                       (let ((start-i i))
-                         ;; Skip alphanumeric chars (#\Space, #\Newline, etc.)
-                         (loop while (and (< i (length text))
-                                          (alphanumericp (char text i)))
-                               do (incf i) (incf col))
-                         ;; If no alphanumeric chars were skipped, skip one char (#\; #\()
-                         (when (= i start-i)
-                           (incf i)
-                           (incf col))))
+                       ;; Skip character literal: name or single char
+                       (cond
+                         ;; Named char: #\Space, #\Newline, etc.
+                         ((and (< i (length text))
+                               (alphanumericp (char text i)))
+                          (loop while (and (< i (length text))
+                                           (alphanumericp (char text i)))
+                                do (incf i) (incf col)))
+                         ;; Single char: #\a, #\(, #\), etc.
+                         ((< i (length text))
+                          (incf i)
+                          (incf col))))
                       (t (incf col))))
                   (#\"
                    (setf in-string t))
@@ -503,11 +505,19 @@
                ;; Normal code
                (t
                 (case ch
-                  ;; Whitespace
-                  ((#\Space #\Tab)
-                   (unless need-indent
-                     (write-char ch result)
-                     (incf line-pos)))
+                   ;; Whitespace
+                   ((#\Space #\Tab)
+                    (if need-indent
+                        ;; At line start: skip (indentation handled elsewhere)
+                        nil
+                        ;; Mid-line: collapse to single space
+                        (progn
+                          (write-char #\Space result)
+                          (incf line-pos)
+                          ;; Skip additional whitespace
+                          (loop while (and (< (1+ i) (length text))
+                                           (member (char text (1+ i)) '(#\Space #\Tab)))
+                                do (incf i)))))
                   (#\Newline
                    (write-char ch result)
                    (setf line-pos 0)
@@ -521,25 +531,53 @@
                    (write-char ch result)
                    (incf line-pos)
                    (setf in-line-comment t))
-                  (#\#
-                   (when (and (< (1+ i) (length text))
-                              (char= (char text (1+ i)) #\|))
-                     (when need-indent
-                       (write-string (indent-string depth indent) result)
-                       (setf line-pos (* depth (length indent)))
-                       (setf need-indent nil))
-                     (write-char ch result)
-                     (incf line-pos)
-                     (write-char (char text (1+ i)) result)
-                     (incf i)
-                     (incf line-pos)
-                     (setf in-block-comment t))
-                   (when need-indent
-                     (write-string (indent-string depth indent) result)
-                     (setf line-pos (* depth (length indent)))
-                     (setf need-indent nil))
-                   (write-char ch result)
-                   (incf line-pos))
+                   (#\#
+                    (cond
+                      ;; Block comment #|
+                      ((and (< (1+ i) (length text))
+                            (char= (char text (1+ i)) #\|))
+                       (when need-indent
+                         (write-string (indent-string depth indent) result)
+                         (setf line-pos (* depth (length indent)))
+                         (setf need-indent nil))
+                       (write-char ch result)
+                       (incf line-pos)
+                       (write-char (char text (1+ i)) result)
+                       (incf i)
+                       (incf line-pos)
+                       (setf in-block-comment t))
+                      ;; Character literal #\
+                      ((and (< (1+ i) (length text))
+                            (char= (char text (1+ i)) #\\))
+                       (when need-indent
+                         (write-string (indent-string depth indent) result)
+                         (setf line-pos (* depth (length indent)))
+                         (setf need-indent nil))
+                       (write-char ch result)
+                       (incf line-pos)
+                       (write-char (char text (1+ i)) result)
+                       (incf i)
+                       (incf line-pos)
+                       ;; Skip char name or single char
+                       (let ((start-i i))
+                         (loop while (and (< i (length text))
+                                          (alphanumericp (char text i)))
+                               do (write-char (char text i) result)
+                                  (incf i)
+                                  (incf line-pos))
+                         (when (= i start-i)
+                           (when (< i (length text))
+                             (write-char (char text i) result)
+                             (incf i)
+                             (incf line-pos)))))
+                      ;; Other # dispatch
+                      (t
+                       (when need-indent
+                         (write-string (indent-string depth indent) result)
+                         (setf line-pos (* depth (length indent)))
+                         (setf need-indent nil))
+                       (write-char ch result)
+                       (incf line-pos))))
                   ;; String start
                   (#\"
                    (when need-indent
