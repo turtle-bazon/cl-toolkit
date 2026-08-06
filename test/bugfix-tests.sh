@@ -118,8 +118,50 @@ else
     FAIL=$((FAIL + 1))
 fi
 
+# Test 7: validate with #\) character literal
+echo ""
+echo "--- validate #\\) ---"
+echo -e "(defun foo ()\n  (char= ch #\\))\n  t)" > /tmp/test-charlit2.lisp
+result=$($BIN validate --file /tmp/test-charlit2.lisp 2>&1)
+if echo "$result" | grep -q '"balanced":true'; then
+    echo "PASS: validate handles #\\) correctly"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL: validate false positive on #\\)"
+    echo "  Got: $result"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test 8: validate with incomplete form and #\(
+echo ""
+echo "--- validate incomplete form with #\\( ---"
+echo -e "(defun foo ()\n  (char= ch #\\()" > /tmp/test-charlit3.lisp
+result=$($BIN validate --file /tmp/test-charlit3.lisp --recovery 2>&1)
+if echo "$result" | grep -q '"balanced":false'; then
+    echo "PASS: validate reports incomplete form with #\\("
+    PASS=$((PASS + 1))
+else
+    echo "FAIL: validate should report incomplete form with #\\("
+    echo "  Got: $result"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test 9: format with write
+echo ""
+echo "--- format --write ---"
+echo -e "(defun foo (x)\n(+ x 1))" > /tmp/test-format-write.lisp
+result=$($BIN format --file /tmp/test-format-write.lisp --write 2>&1)
+if echo "$result" | grep -q '"success":true'; then
+    echo "PASS: format --write succeeds"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL: format --write failed"
+    echo "  Got: $result"
+    FAIL=$((FAIL + 1))
+fi
+
 # Cleanup
-rm -f /tmp/test-bugs.lisp /tmp/test-replace.lisp /tmp/test-insert.lisp /tmp/test-format.lisp /tmp/test-delete.lisp /tmp/test-charlit.lisp
+rm -f /tmp/test-bugs.lisp /tmp/test-replace.lisp /tmp/test-insert.lisp /tmp/test-format.lisp /tmp/test-delete.lisp /tmp/test-charlit.lisp /tmp/test-charlit2.lisp /tmp/test-charlit3.lisp /tmp/test-format-write.lisp
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

@@ -171,6 +171,7 @@ export default tool({
     } else if (command === "validate") {
       if (absolutePath) {
         cmdArgs.push("--file", absolutePath)
+        if (recovery) cmdArgs.push("--recovery")
       } else {
         return JSON.stringify({ error: "Provide filePath for validate command" })
       }
@@ -322,11 +323,11 @@ export default tool({
       // Handle format command
       if (command === "format") {
         let diff = ""
-        if (originalSource) {
-          diff = generateDiff(originalSource, result, absolutePath || "file")
+        if (originalSource && result.source) {
+          diff = generateDiff(originalSource, result.source, absolutePath || "file")
         }
         return JSON.stringify({
-          source: result,
+          source: result.source,
           diff: diff || undefined,
           _summary: "Code reformatted",
         })

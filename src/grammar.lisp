@@ -318,8 +318,10 @@
                   (#\] (if (zerop depth) (return (1+ i)) (decf depth)))
                   (#\{ (incf depth))
                   (#\} (if (zerop depth) (return (1+ i)) (decf depth)))
-                  (#\# (when (and (< (1+ i) end) (char= (char text (1+ i)) #\|))
-                         (incf block-depth) (incf i))))))
+               (#\# (when (and (< (1+ i) end) (char= (char text (1+ i)) #\|))
+                          (incf block-depth) (incf i))
+                     (when (and (< (1+ i) end) (char= (char text (1+ i)) #\\))
+                           (incf i))))))
           finally (return end))))
 
 (defun skip-whitespace (text pos end)

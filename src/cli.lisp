@@ -208,12 +208,15 @@
 ;;; ============================================================
 
 (defun validate/handler (cmd)
-  (let ((file (clingon:getopt cmd :file)))
+  (let ((file (clingon:getopt cmd :file))
+        (recovery (clingon:getopt cmd :recovery-flag)))
     (unless file
       (format *error-output* "Error: --file is required~%")
       (clingon:exit 1))
     (let* ((text (read-file-to-string file))
-           (ast (cl-toolkit-grammar::parse-lisp-source text))
+           (ast (if recovery
+                    (cl-toolkit-grammar::parse-with-recovery text)
+                    (cl-toolkit-grammar::parse-lisp-source text)))
            (result (validate ast)))
       (format *standard-output* "{")
       (format *standard-output* "\"balanced\":~a"
@@ -245,7 +248,9 @@
    :description "Validate file and report errors/warnings as JSON"
    :options (list
              (clingon:make-option :string :long-name "file" :short-name #\f
-                                  :description "File to validate" :required t :key :file))
+                                  :description "File to validate" :required t :key :file)
+             (clingon:make-option :flag :long-name "recovery"
+                                  :description "Use error recovery parser" :key :recovery-flag))
    :handler #'validate/handler))
 
 ;;; ============================================================
