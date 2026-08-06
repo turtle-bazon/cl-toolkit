@@ -156,6 +156,13 @@
     (let ((val (if (stringp char) char (string char))))
       (make-node :char :value val :start start :end end))))
 
+(defrule sharp-dispatch
+    (and "#" (or char-literal vector-form quote-form sharp-quote sharp-dot))
+  (:destructure (sharp dispatch &bounds start end)
+    (declare (ignore sharp))
+    (if (consp dispatch) dispatch
+        (make-node :symbol :name (format nil "#~a" dispatch) :start start :end end))))
+
 ;;; Symbol (must not start with digit)
 (defrule sign-char
     (or #\+ #\-))
@@ -227,7 +234,7 @@
 
 ;;; Top-level form
 (defrule form
-    (or comment list-form vector-form quote-form sharp-quote sharp-dot char-literal string-literal number symbol)
+    (or comment sharp-dispatch list-form vector-form quote-form sharp-quote sharp-dot char-literal string-literal number symbol)
   (:lambda (result)
     result))
 
