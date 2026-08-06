@@ -337,17 +337,18 @@
   (let* ((file (clingon:getopt cmd :file))
          (code (clingon:getopt cmd :code))
          (indent (clingon:getopt cmd :indent))
+         (write (clingon:getopt cmd :write))
          (text (cond
                  (code code)
                  (file (read-file-to-string file))
                  (t (format *error-output* "Error: --file or --code required~%")
                     (clingon:exit 1)))))
     (let ((formatted (format-source text :indent indent)))
-      (if file
-          (with-open-file (stream file :direction :output
-                                       :if-exists :supersede)
-            (write-string formatted stream))
-          (write-string formatted *standard-output*)))))
+      (if write
+          (progn
+            (write-result-to-file file formatted)
+            (output-edit-result formatted))
+          (output-edit-result formatted)))))
 
 (defun format/command ()
   (clingon:make-command
@@ -362,7 +363,8 @@
              (clingon:make-option :string :long-name "indent"
                                   :description "Indentation string (default: two spaces)"
                                   :initial-value "  "
-                                  :key :indent))
+                                  :key :indent)
+             (make-write-option))
    :handler #'format/handler))
 
 ;;; ============================================================
@@ -390,9 +392,9 @@
                     (t
                      (format *error-output* "Error: --line/--col or --index required~%")
                      (clingon:exit 1)))))
-            (if write
-                (write-result-to-file file result)
-                (output-edit-result result)))
+            (when write
+              (write-result-to-file file result))
+            (output-edit-result result))
         (error (c)
           (output-edit-result nil (format nil "~a" c)))))))
 
@@ -446,9 +448,9 @@
                     (t
                      (format *error-output* "Error: --line/--col/--code or --at-end required~%")
                      (clingon:exit 1)))))
-            (if write
-                (write-result-to-file file result)
-                (output-edit-result result)))
+            (when write
+              (write-result-to-file file result))
+            (output-edit-result result))
         (error (c)
           (output-edit-result nil (format nil "~a" c)))))))
 
@@ -494,9 +496,9 @@
     (let ((text (read-file-to-string file)))
       (handler-case
           (let ((result (replace-form-at text line col code :recovery recovery)))
-            (if write
-                (write-result-to-file file result)
-                (output-edit-result result)))
+            (when write
+              (write-result-to-file file result))
+            (output-edit-result result))
         (error (c)
           (output-edit-result nil (format nil "~a" c)))))))
 
