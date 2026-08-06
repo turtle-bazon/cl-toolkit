@@ -160,8 +160,81 @@ else
     FAIL=$((FAIL + 1))
 fi
 
+# Test 10: balance with #\(` - verify #\(` not counted as structural
+echo ""
+echo "--- balance #\\( ---"
+printf '(let ((ch #\\()))\\n' > /tmp/test-balance-hash.lisp
+result=$($BIN balance --file /tmp/test-balance-hash.lisp 2>&1)
+if echo "$result" | grep -q '"balanced":true'; then
+    echo "PASS: balance handles #\\( correctly"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL: balance counts #\\( as structural paren"
+    echo "  Got: $result"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test 11: balance with #\) - verify #\) not counted as structural
+echo ""
+echo "--- balance #\\) ---"
+echo -e "(let ((ch #\\))) t)" > /tmp/test-balance-hash2.lisp
+result=$($BIN balance --file /tmp/test-balance-hash2.lisp 2>&1)
+if echo "$result" | grep -q '"balanced":true'; then
+    echo "PASS: balance handles #\\) correctly"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL: balance counts #\\) as structural paren"
+    echo "  Got: $result"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test 12: balance with #\Space - verify named char not counted
+echo ""
+echo "--- balance #\\Space ---"
+echo -e "(let ((ch #\\Space)))" > /tmp/test-balance-hash3.lisp
+result=$($BIN balance --file /tmp/test-balance-hash3.lisp 2>&1)
+if echo "$result" | grep -q '"balanced":true'; then
+    echo "PASS: balance handles #\\Space correctly"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL: balance counts #\\Space as structural"
+    echo "  Got: $result"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test 13: format normalizes whitespace
+echo ""
+echo "--- format whitespace ---"
+result=$($BIN format --code "(defun   foo(x)  (+  x 1))" 2>&1)
+if echo "$result" | grep -q "(defun foo(x) (+ x 1))"; then
+    echo "PASS: format normalizes whitespace"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL: format does not normalize whitespace"
+    echo "  Got: $result"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test 14: validate with #\(` in complex code (user's exact case)
+echo ""
+echo "--- validate complex #\\( ---"
+cat > /tmp/test-complex-hash.lisp << 'ENDOFFILE'
+(defun test-char-literal ()
+  (let ((ch #\()))
+    (format t "Char: ~A~%" ch))
+ENDOFFILE
+result=$($BIN validate --file /tmp/test-complex-hash.lisp 2>&1)
+if echo "$result" | grep -q '"balanced":true'; then
+    echo "PASS: validate handles complex #\\( correctly"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL: validate fails on complex #\\("
+    echo "  Got: $result"
+    FAIL=$((FAIL + 1))
+fi
+
 # Cleanup
-rm -f /tmp/test-bugs.lisp /tmp/test-replace.lisp /tmp/test-insert.lisp /tmp/test-format.lisp /tmp/test-delete.lisp /tmp/test-charlit.lisp /tmp/test-charlit2.lisp /tmp/test-charlit3.lisp /tmp/test-format-write.lisp
+rm -f /tmp/test-bugs.lisp /tmp/test-replace.lisp /tmp/test-insert.lisp /tmp/test-format.lisp /tmp/test-delete.lisp /tmp/test-charlit.lisp /tmp/test-charlit2.lisp /tmp/test-charlit3.lisp /tmp/test-format-write.lisp /tmp/test-balance-hash.lisp /tmp/test-balance-hash2.lisp /tmp/test-balance-hash3.lisp /tmp/test-complex-hash.lisp
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
