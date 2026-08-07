@@ -27,7 +27,7 @@
       (format *standard-output* "{\"success\":true,\"source\":\"~a\"}~%"
               (cl-toolkit-ast::escape-json-string text))))
 
-(defun write-result-to-file (file result)
+(defun write-result-to-file (file result &optional quiet)
   "Write RESULT source to FILE. Creates FILE.bak backup first."
   (let ((source (if (stringp result)
                     result
@@ -43,7 +43,8 @@
                                    :if-exists :supersede
                                    :if-does-not-exist :create)
         (write-string source stream))
-      (format *error-output* "Wrote ~a (backup: ~a)~%" file bak))))
+      (unless quiet
+        (format *error-output* "Wrote ~a (backup: ~a)~%" file bak)))))
 
 ;;; ============================================================
 ;;; Shared Options
@@ -55,6 +56,13 @@
                        :long-name "recovery"
                        :description "Use error recovery parser"
                        :key :recovery))
+
+(defun make-quiet-option ()
+  "Create the --quiet option."
+  (clingon:make-option :flag
+                       :long-name "quiet"
+                       :description "Suppress informational output"
+                       :key :quiet))
 
 (defun make-write-option ()
   "Create the --write option for in-place editing."
@@ -343,6 +351,7 @@
          (code (clingon:getopt cmd :code))
          (indent (clingon:getopt cmd :indent))
          (write (clingon:getopt cmd :write))
+         (quiet (clingon:getopt cmd :quiet))
          (text (cond
                  (code code)
                  (file (read-file-to-string file))
@@ -351,7 +360,7 @@
     (let ((formatted (format-source text :indent indent)))
       (if write
           (progn
-            (write-result-to-file file formatted)
+            (write-result-to-file file formatted quiet)
             (output-edit-result formatted))
           (output-edit-result formatted)))))
 
@@ -364,13 +373,14 @@
              (clingon:make-option :string :long-name "file" :short-name #\f
                                   :description "File to format" :key :file)
              (clingon:make-option :string :long-name "code"
-                                  :description "Inline code to format" :key :code)
-             (clingon:make-option :string :long-name "indent"
-                                  :description "Indentation string (default: two spaces)"
-                                  :initial-value "  "
-                                  :key :indent)
-             (make-write-option))
-   :handler #'format/handler))
+                                   :description "Inline code to format" :key :code)
+              (clingon:make-option :string :long-name "indent"
+                                   :description "Indentation string (default: two spaces)"
+                                   :initial-value "  "
+                                   :key :indent)
+              (make-write-option)
+              (make-quiet-option))
+    :handler #'format/handler))
 
 ;;; ============================================================
 ;;; Delete Command
@@ -382,6 +392,7 @@
          (col (clingon:getopt cmd :col))
          (index (clingon:getopt cmd :index))
          (write (clingon:getopt cmd :write))
+         (quiet (clingon:getopt cmd :quiet))
          (recovery (clingon:getopt cmd :recovery)))
     (unless file
       (format *error-output* "Error: --file is required~%")
@@ -398,7 +409,7 @@
                      (format *error-output* "Error: --line/--col or --index required~%")
                      (clingon:exit 1)))))
             (when write
-              (write-result-to-file file result))
+              (write-result-to-file file result quiet))
             (output-edit-result result))
         (error (c)
           (output-edit-result nil (format nil "~a" c)))))))
@@ -412,17 +423,18 @@
                       Use --line/--col to delete by position, or --index to delete ~
                       the N-th top-level form."
    :options (list
-             (clingon:make-option :string :long-name "file" :short-name #\f
-                                  :description "File to edit" :required t :key :file)
-             (clingon:make-option :integer :long-name "line" :short-name #\l
-                                  :description "Line number" :key :line)
-             (clingon:make-option :integer :long-name "col" :short-name #\c
-                                  :description "Column number" :key :col)
-             (clingon:make-option :integer :long-name "index"
-                                  :description "Top-level form index (0-based)" :key :index)
-             (make-write-option)
-             (make-recovery-option))
-   :handler #'delete/handler))
+              (clingon:make-option :string :long-name "file" :short-name #\f
+                                   :description "File to edit" :required t :key :file)
+              (clingon:make-option :integer :long-name "line" :short-name #\l
+                                   :description "Line number" :key :line)
+              (clingon:make-option :integer :long-name "col" :short-name #\c
+                                   :description "Column number" :key :col)
+              (clingon:make-option :integer :long-name "index"
+                                   :description "Top-level form index (0-based)" :key :index)
+              (make-write-option)
+              (make-quiet-option)
+              (make-recovery-option))
+    :handler #'delete/handler))
 
 ;;; ============================================================
 ;;; Insert Command
@@ -436,6 +448,7 @@
          (at-end (clingon:getopt cmd :at-end))
          (after (clingon:getopt cmd :after))
          (write (clingon:getopt cmd :write))
+         (quiet (clingon:getopt cmd :quiet))
          (recovery (clingon:getopt cmd :recovery))
          (validate (clingon:getopt cmd :validate-flag)))
     (unless file
@@ -454,7 +467,7 @@
                      (format *error-output* "Error: --line/--col/--code or --at-end required~%")
                      (clingon:exit 1)))))
             (when write
-              (write-result-to-file file result))
+              (write-result-to-file file result quiet))
             (output-edit-result result))
         (error (c)
           (output-edit-result nil (format nil "~a" c)))))))
@@ -465,24 +478,25 @@
    :usage "--file FILE --code CODE (--line L --col C | --at-end)"
    :description "Insert code before/after a form, or at end of file"
    :options (list
-             (clingon:make-option :string :long-name "file" :short-name #\f
-                                  :description "File to edit" :required t :key :file)
-             (clingon:make-option :integer :long-name "line" :short-name #\l
-                                  :description "Line number" :key :line)
-             (clingon:make-option :integer :long-name "col" :short-name #\c
-                                  :description "Column number" :key :col)
-             (clingon:make-option :string :long-name "code" :short-name #\C
-                                  :description "Code to insert" :key :code)
-             (clingon:make-option :flag :long-name "at-end"
-                                  :description "Insert at end of file" :key :at-end)
-             (clingon:make-option :flag :long-name "after"
-                                  :description "Insert after the form (default: before)" :key :after)
-             (make-write-option)
-             (make-recovery-option)
-             (clingon:make-option :flag :long-name "validate"
-                                  :description "Validate the inserted code"
-                                  :key :validate-flag))
-   :handler #'insert/handler))
+              (clingon:make-option :string :long-name "file" :short-name #\f
+                                   :description "File to edit" :required t :key :file)
+              (clingon:make-option :integer :long-name "line" :short-name #\l
+                                   :description "Line number" :key :line)
+              (clingon:make-option :integer :long-name "col" :short-name #\c
+                                   :description "Column number" :key :col)
+              (clingon:make-option :string :long-name "code" :short-name #\C
+                                   :description "Code to insert" :key :code)
+              (clingon:make-option :flag :long-name "at-end"
+                                   :description "Insert at end of file" :key :at-end)
+              (clingon:make-option :flag :long-name "after"
+                                   :description "Insert after the form (default: before)" :key :after)
+              (make-write-option)
+              (make-quiet-option)
+              (make-recovery-option)
+              (clingon:make-option :flag :long-name "validate"
+                                   :description "Validate the inserted code"
+                                   :key :validate-flag))
+    :handler #'insert/handler))
 
 ;;; ============================================================
 ;;; Replace Command
@@ -494,6 +508,7 @@
          (col (clingon:getopt cmd :col))
          (code (clingon:getopt cmd :code))
          (write (clingon:getopt cmd :write))
+         (quiet (clingon:getopt cmd :quiet))
          (recovery (clingon:getopt cmd :recovery)))
     (unless (and file line col code)
       (format *error-output* "Error: --file, --line, --col, and --code are required~%")
@@ -502,7 +517,7 @@
       (handler-case
           (let ((result (replace-form-at text line col code :recovery recovery)))
             (when write
-              (write-result-to-file file result))
+              (write-result-to-file file result quiet))
             (output-edit-result result))
         (error (c)
           (output-edit-result nil (format nil "~a" c)))))))
@@ -522,6 +537,7 @@
              (clingon:make-option :string :long-name "code" :short-name #\C
                                   :description "Replacement code" :required t :key :code)
              (make-write-option)
+             (make-quiet-option)
              (make-recovery-option))
    :handler #'replace/handler))
 
@@ -536,6 +552,7 @@
          (to-line (clingon:getopt cmd :to-line))
          (to-col (clingon:getopt cmd :to-col))
          (write (clingon:getopt cmd :write))
+         (quiet (clingon:getopt cmd :quiet))
          (recovery (clingon:getopt cmd :recovery)))
     (unless file
       (format *error-output* "Error: --file is required~%")
@@ -545,7 +562,7 @@
           (let ((result (move-form text from-line from-col to-line to-col
                                    :recovery recovery)))
             (if write
-                (write-result-to-file file result)
+                (write-result-to-file file result quiet)
                 (output-edit-result result)))
         (error (c)
           (output-edit-result nil (format nil "~a" c)))))))
@@ -567,6 +584,7 @@
              (clingon:make-option :integer :long-name "to-col" :short-name #\b
                                   :description "Dest col" :required t :key :to-col)
              (make-write-option)
+             (make-quiet-option)
              (make-recovery-option))
    :handler #'move/handler))
 

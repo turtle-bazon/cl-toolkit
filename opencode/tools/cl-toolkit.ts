@@ -196,6 +196,7 @@ export default tool({
         return JSON.stringify({ error: "delete command requires filePath" })
       }
       if (write) cmdArgs.push("--write")
+      if (write) cmdArgs.push("--quiet")
       if (recovery) cmdArgs.push("--recovery")
       if (index !== undefined) {
         cmdArgs.push("--file", absolutePath, "--index", String(index))
@@ -209,6 +210,7 @@ export default tool({
         return JSON.stringify({ error: "insert command requires filePath" })
       }
       if (write) cmdArgs.push("--write")
+      if (write) cmdArgs.push("--quiet")
       if (recovery) cmdArgs.push("--recovery")
       if (validate) cmdArgs.push("--validate")
       if (after) cmdArgs.push("--after")
@@ -222,6 +224,7 @@ export default tool({
         return JSON.stringify({ error: "replace command requires filePath, line, col, and code" })
       }
       if (write) cmdArgs.push("--write")
+      if (write) cmdArgs.push("--quiet")
       if (recovery) cmdArgs.push("--recovery")
       cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--code", code)
     } else if (command === "move") {
@@ -229,6 +232,7 @@ export default tool({
         return JSON.stringify({ error: "move command requires filePath, line1, col1, line2, col2" })
       }
       if (write) cmdArgs.push("--write")
+      if (write) cmdArgs.push("--quiet")
       if (recovery) cmdArgs.push("--recovery")
       cmdArgs.push("--file", absolutePath, "--from-line", String(line1), "--from-col", String(col1), "--to-line", String(line2), "--to-col", String(col2))
     } else if (command === "balance") {
@@ -243,6 +247,7 @@ export default tool({
       if (absolutePath) {
         cmdArgs.push("--file", absolutePath)
         if (write) cmdArgs.push("--write")
+        if (write) cmdArgs.push("--quiet")
       } else if (code) {
         cmdArgs.push("--code", code)
       } else {
