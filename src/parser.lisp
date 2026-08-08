@@ -44,7 +44,7 @@
              (node-start node) (node-end node)
              (>= offset (node-start node))
              (< offset (node-end node)))
-    (let ((best node))
+    (let ((best node) (next-nearest nil))
       (dolist (child (node-children node))
         (when (nodep child)
           (let ((child-start (node-start child))
@@ -56,8 +56,16 @@
               (let ((found (find-node-at-offset child offset)))
                 (when found
                   (setf best found)
-                  (return)))))))
-      best)))
+                  (return))))
+            ;; Track nearest child that starts after offset (whitespace before form)
+            (when (and child-start (> child-start offset))
+              (when (or (null next-nearest)
+                        (< child-start (node-start next-nearest)))
+                (setf next-nearest child))))))
+      ;; If no child contained the offset, return nearest next form
+      (if (and (eq best node) next-nearest)
+          next-nearest
+          best))))
 
 (defun find-node-at-offset-all (node offset)
   "Find ALL nodes containing OFFSET (0-indexed), from outermost to innermost."
@@ -95,36 +103,37 @@
 ;;; --- Position-based queries ---
 
 (defun find-form-at (ast text line col)
-  "Find the innermost form containing the given LINE and COL (1-indexed).
-   Returns the deepest AST node at that position.
-   When position is in whitespace, returns the next form after that position."
+  "Find the form to operate on at the given LINE and COL (1-indexed).
+   Finds the smallest form that contains the target offset and whose start
+   line is at or before LINE. This means the cursor can be anywhere inside
+   a form and it will target that form, not drill into subforms."
   (let* ((target-offset (cl-toolkit-ast:offset-to-line-col-inverse text line col))
-         (all-nodes (find-node-at-offset-all ast target-offset)))
-    ;; Find the deepest node that contains the offset
-    (let ((containing nil))
-      (dolist (node all-nodes)
-        (when (and (node-start node) (node-end node)
-                   (>= target-offset (node-start node))
-                   (< target-offset (node-end node)))
-          (setf containing node)))
-      ;; If we found a containing node, try to find a deeper one
-      (if containing
-           (let ((deeper (find-node-at-offset containing target-offset)))
-            (if (and deeper (not (eq deeper containing)))
-                deeper
-                containing))
-          ;; No node contains the offset exactly, find nearest node
-          (let ((nearest nil)
-                (min-distance nil))
-            (dolist (node all-nodes)
-              (when (and (node-start node) (node-end node))
-                (let ((dist (if (< target-offset (node-start node))
-                                (- (node-start node) target-offset)
-                                (- target-offset (node-end node)))))
-                  (when (or (null min-distance) (< dist min-distance))
-                    (setf min-distance dist)
-                    (setf nearest node)))))
-            nearest)))))
+         (all-nodes (find-node-at-offset-all ast target-offset))
+         (best nil))
+    ;; Among all nodes containing the offset, find the one with the
+    ;; earliest start line (but not after target line). If multiple nodes
+    ;; start on the same line, prefer the innermost (smallest) one.
+    (dolist (node all-nodes)
+      (when (and (node-start node) (node-end node)
+                 (>= target-offset (node-start node))
+                 (< target-offset (node-end node)))
+        (multiple-value-bind (node-line node-col)
+            (cl-toolkit-ast:offset-to-line-col text (node-start node))
+          (declare (ignore node-col))
+          (when (<= node-line line)
+            (if (null best)
+                (setf best node)
+                (multiple-value-bind (best-line best-col)
+                    (cl-toolkit-ast:offset-to-line-col text (node-start best))
+                  (declare (ignore best-col))
+                  ;; Prefer the node with the LATER start line (closer to target)
+                  ;; as that's the more specific form. If same line, prefer
+                  ;; the one with larger start offset (innermost on that line).
+                  (when (or (> node-line best-line)
+                            (and (= node-line best-line)
+                                 (> (node-start node) (node-start best))))
+                    (setf best node))))))))
+    best))
 
 ;;; --- Range extraction ---
 

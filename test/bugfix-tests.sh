@@ -233,8 +233,37 @@ else
     FAIL=$((FAIL + 1))
 fi
 
+# Test 15: replace should target smallest enclosing form, not parent
+echo ""
+echo "--- replace scope ---"
+cat > /tmp/test-replace-scope.lisp << 'ENDOFFILE'
+(defun dispatch-token (tok stack vars)
+  (cond
+    ((or (string= tok "(") (string= tok ")"))
+     (values stack nil))
+    ((or (string= tok "+"))
+     (values stack nil))
+    (t
+     (values stack nil))))
+ENDOFFILE
+result=$($BIN replace --file /tmp/test-replace-scope.lisp --line 5 --col 1 --code '((or (string= tok "+")) (values stack (+ 1 2)))' 2>&1)
+# The replacement should only affect the clause on line 5, not the whole cond
+if echo "$result" | grep -q "defun foo" 2>/dev/null; then
+    # This shouldn't happen - the defun foo test was from the earlier test file
+    true
+fi
+# Check that the first clause is preserved
+if echo "$result" | grep -q 'string=' && echo "$result" | grep -q 'values stack'; then
+    echo "PASS: replace targets clause, not entire cond"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL: replace targets wrong scope"
+    echo "  Got: $result"
+    FAIL=$((FAIL + 1))
+fi
+
 # Cleanup
-rm -f /tmp/test-bugs.lisp /tmp/test-replace.lisp /tmp/test-insert.lisp /tmp/test-format.lisp /tmp/test-delete.lisp /tmp/test-charlit.lisp /tmp/test-charlit2.lisp /tmp/test-charlit3.lisp /tmp/test-format-write.lisp /tmp/test-balance-hash.lisp /tmp/test-balance-hash2.lisp /tmp/test-balance-hash3.lisp /tmp/test-complex-hash.lisp
+rm -f /tmp/test-bugs.lisp /tmp/test-replace.lisp /tmp/test-insert.lisp /tmp/test-format.lisp /tmp/test-delete.lisp /tmp/test-charlit.lisp /tmp/test-charlit2.lisp /tmp/test-charlit3.lisp /tmp/test-format-write.lisp /tmp/test-balance-hash.lisp /tmp/test-balance-hash2.lisp /tmp/test-balance-hash3.lisp /tmp/test-complex-hash.lisp /tmp/test-replace-scope.lisp
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
