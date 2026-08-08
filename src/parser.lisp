@@ -620,9 +620,8 @@
 (defun format-process-close-delimiter (ch depth indent result line-pos need-indent)
   "Process closing delimiter. Returns (values new-line-pos new-need-indent new-depth)."
   (let ((new-depth (1- depth)))
-    (multiple-value-bind (lp ni) (format-apply-indent new-depth indent result line-pos need-indent)
-      (write-char ch result) (incf lp)
-      (values lp nil new-depth))))
+    (write-char ch result)
+    (values (1+ line-pos) nil new-depth)))
 
 (defun format-dispatch-line-comment (ch i text result line-pos mode need-indent)
   "Dispatch line comment mode. Returns updated state."
@@ -650,7 +649,7 @@
     (when ended (setf mode :normal))
     (values line-pos mode)))
 
-(defun format-dispatch-space (ch i text result line-pos need-indent)
+(defun format-dispatch-space (ch i text depth indent result line-pos need-indent)
   "Dispatch whitespace character. Returns updated state."
   (unless need-indent
     (write-char #\Space result) (incf line-pos)
@@ -689,44 +688,44 @@
     (values line-pos need-indent)))
 
 (defun format-dispatch-normal (ch i text depth indent result line-pos need-indent mode)
-  "Dispatch normal mode character. Returns updated state."
+  "Dispatch normal mode character. Returns (values i line-pos need-indent mode depth)."
   (case ch
     ((#\Space #\Tab)
      (multiple-value-setq (line-pos need-indent i)
-       (format-dispatch-space ch i text result line-pos need-indent))
-     (values i line-pos need-indent mode))
+       (format-dispatch-space ch i text depth indent result line-pos need-indent))
+     (values i line-pos need-indent mode depth))
     (#\Newline
      (write-char ch result) (setf line-pos 0 need-indent t)
-     (values i line-pos need-indent mode))
+     (values i line-pos need-indent mode depth))
     (#\;
      (multiple-value-setq (line-pos need-indent)
        (format-dispatch-semicolon depth indent result line-pos need-indent))
      (setf mode :line-comment)
-     (values i line-pos need-indent mode))
+     (values i line-pos need-indent mode depth))
     (#\#
      (multiple-value-setq (i line-pos need-indent mode)
        (format-dispatch-hash ch i text depth indent result line-pos need-indent mode))
-     (values i line-pos need-indent mode))
+     (values i line-pos need-indent mode depth))
     (#\"
      (multiple-value-setq (line-pos need-indent)
        (format-dispatch-quote depth indent result line-pos need-indent))
      (setf mode :string)
-     (values i line-pos need-indent mode))
+     (values i line-pos need-indent mode depth))
     ((#\[ #\{ #\()
      (multiple-value-bind (lp ni d)
          (format-dispatch-delimiter ch depth indent result line-pos need-indent t)
        (setf line-pos lp need-indent ni depth d)
-       (values i line-pos need-indent mode)))
+       (values i line-pos need-indent mode depth)))
     ((#\] #\} #\))
      (multiple-value-bind (lp ni d)
          (format-dispatch-delimiter ch depth indent result line-pos need-indent nil)
        (setf line-pos lp need-indent ni depth d)
-       (values i line-pos need-indent mode)))
+       (values i line-pos need-indent mode depth)))
     (t
      (multiple-value-bind (lp ni) (format-apply-indent depth indent result line-pos need-indent)
        (setf line-pos lp need-indent ni)
        (write-char ch result) (incf line-pos)
-       (values i line-pos need-indent mode)))))
+       (values i line-pos need-indent mode depth)))))
 
 (defun format-source (text &key (indent "  ") (max-width 80))
   "Reformat Lisp source TEXT with consistent indentation.
@@ -748,9 +747,9 @@
                (:string
                 (multiple-value-setq (line-pos mode)
                   (format-dispatch-string ch i text result line-pos mode)))
-               (:normal
-                (multiple-value-setq (i line-pos need-indent mode)
-                  (format-dispatch-normal ch i text depth indent result line-pos need-indent mode)))))
+                (:normal
+                 (multiple-value-setq (i line-pos need-indent mode depth)
+                   (format-dispatch-normal ch i text depth indent result line-pos need-indent mode)))))
     (get-output-stream-string result)))
 
 ;;; --- Undo/Redo support (simple approach) ---
