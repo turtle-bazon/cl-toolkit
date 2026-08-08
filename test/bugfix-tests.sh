@@ -163,7 +163,7 @@ fi
 # Test 10: balance with #\(` - verify #\(` not counted as structural
 echo ""
 echo "--- balance #\\( ---"
-printf '(let ((ch #\\()))\\n' > /tmp/test-balance-hash.lisp
+echo '(let ((ch #\()) t)' > /tmp/test-balance-hash.lisp
 result=$($BIN balance --file /tmp/test-balance-hash.lisp 2>&1)
 if echo "$result" | grep -q '"balanced":true'; then
     echo "PASS: balance handles #\\( correctly"
@@ -177,7 +177,7 @@ fi
 # Test 11: balance with #\) - verify #\) not counted as structural
 echo ""
 echo "--- balance #\\) ---"
-echo -e "(let ((ch #\\))) t)" > /tmp/test-balance-hash2.lisp
+echo "(let ((ch #\\))) t)" > /tmp/test-balance-hash2.lisp
 result=$($BIN balance --file /tmp/test-balance-hash2.lisp 2>&1)
 if echo "$result" | grep -q '"balanced":true'; then
     echo "PASS: balance handles #\\) correctly"
@@ -191,7 +191,7 @@ fi
 # Test 12: balance with #\Space - verify named char not counted
 echo ""
 echo "--- balance #\\Space ---"
-echo -e "(let ((ch #\\Space)))" > /tmp/test-balance-hash3.lisp
+echo "(let ((ch #\\Space)) t)" > /tmp/test-balance-hash3.lisp
 result=$($BIN balance --file /tmp/test-balance-hash3.lisp 2>&1)
 if echo "$result" | grep -q '"balanced":true'; then
     echo "PASS: balance handles #\\Space correctly"
