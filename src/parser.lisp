@@ -415,6 +415,10 @@
            ((< ci (length text))
             (incf ci) (incf cc)))
          (values (1- ci) cc nil)))
+      ;; Vector #( — let ( be processed normally so it balances with )
+      ((and (< next-i (length text))
+            (char= (char text next-i) #\())
+       (values i (+ col 1) nil))
       (t (values next-i (1+ col) nil)))))
 
 (defun balance-process-normal (ch i text depth max-depth line col errors)
@@ -448,7 +452,8 @@
       (balance-process-line-comment ch line col depth line-start-depth lines)
     (when ended
       (setf lines new-lines line-start-depth depth)
-      (incf line) (setf col 1))
+      (incf line) (setf col 1)
+      (setf mode :normal))
     (incf col)
     (values i line col depth line-start-depth lines mode)))
 
@@ -466,7 +471,7 @@
   "Dispatch string mode. Returns updated state values."
   (multiple-value-bind (ended ni nl nc)
       (balance-process-string ch i text line col)
-    (when ended (setf i ni))
+    (when ended (setf i ni mode :normal))
     (when (char= ch #\Newline)
       (setf line (1+ line) col 1))
     (incf col)
