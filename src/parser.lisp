@@ -107,23 +107,19 @@
    Finds the smallest form that contains the target offset and whose start
    line is at or before LINE. This means the cursor can be anywhere inside
    a form and it will target that form, not drill into subforms.
-   Never returns the root node (which spans the entire file) — that would
-   cause replace to destroy the entire file."
+   Never returns the root node (the outermost AST node spanning the entire
+   file) — that would cause replace to destroy the entire file."
   (let* ((target-offset (cl-toolkit-ast:offset-to-line-col-inverse text line col))
-         (text-length (length text))
          (all-nodes (find-node-at-offset-all ast target-offset))
          (best nil))
     ;; Among all nodes containing the offset, find the one with the
     ;; latest start line (but not after target line). If multiple nodes
     ;; start on the same line, prefer the innermost (smallest) one.
-    ;; Exclude the root node (spans entire text) to prevent data loss.
-    (dolist (node all-nodes)
+    ;; Skip the first node (root/outermost) to prevent data loss.
+    (dolist (node (rest all-nodes))
       (when (and (node-start node) (node-end node)
                  (>= target-offset (node-start node))
-                 (< target-offset (node-end node))
-                 ;; Exclude root node — never replace the entire file
-                 (not (and (= (node-start node) 0)
-                           (= (node-end node) text-length))))
+                 (< target-offset (node-end node)))
         (multiple-value-bind (node-line node-col)
             (cl-toolkit-ast:offset-to-line-col text (node-start node))
           (declare (ignore node-col))
