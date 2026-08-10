@@ -24,42 +24,77 @@ make build
 
 Produces `build/cl-toolkit`.
 
+## Input Sources
+
+All commands accept input from three sources (in priority order):
+
+1. **`--code`** - Inline code string
+2. **`--file`** - Path to a file
+3. **stdin** - Piped input
+
+Examples:
+```bash
+# From file
+cl-toolkit parse --file myfile.lisp
+
+# From inline code
+cl-toolkit parse --code "(+ 1 2)"
+
+# From stdin
+echo "(+ 1 2)" | cl-toolkit parse
+cat myfile.lisp | cl-toolkit validate
+```
+
 ## Usage
 
 ```bash
-# Parse a file
+# Parse
 cl-toolkit parse --file myfile.lisp
-
-# Parse inline code
 cl-toolkit parse --code "(+ 1 2)"
+echo "(+ 1 2)" | cl-toolkit parse
 
-# Validate a file
+# Validate
 cl-toolkit validate --file myfile.lisp
+echo "(defun foo () (bar))" | cl-toolkit validate
 
 # Find form at position
 cl-toolkit find --file myfile.lisp --line 5 --col 2
+cl-toolkit find --code "(defun foo () (bar))" --line 1 --col 2
 
 # List top-level forms
 cl-toolkit top-level --file myfile.lisp
+echo "(defun foo () (bar))" | cl-toolkit top-level
 
-# Delete form at position
+# Delete form
 cl-toolkit delete --file myfile.lisp --line 5 --col 2
+cl-toolkit delete --file myfile.lisp --index 0
+echo "(defun foo ()) (defun bar ())" | cl-toolkit delete --index 0
 
 # Insert code
-cl-toolkit insert --file myfile.lisp --line 5 --col 2 --code "(new-form)"
+cl-toolkit insert --file myfile.lisp --line 5 --col 2 --insert "(new-form)"
+echo "(defun foo ())" | cl-toolkit insert --insert "(defun bar ())" --at-end
 
 # Replace form
-cl-toolkit replace --file myfile.lisp --line 5 --col 2 --code "(replaced-form)"
+cl-toolkit replace --file myfile.lisp --line 5 --col 2 --replace "(replaced-form)"
+echo "(defun foo ())" | cl-toolkit replace --line 1 --col 1 --replace "(defun bar ())"
 
 # Move form
 cl-toolkit move --file myfile.lisp --from-line 5 --from-col 2 --to-line 10 --to-col 2
 
 # Check balance
 cl-toolkit balance --file myfile.lisp
+echo "(+ 1 2)" | cl-toolkit balance
 
 # Format source
 cl-toolkit format --file myfile.lisp
+echo "(defun  foo(x)  (+ x 1))" | cl-toolkit format
 ```
+
+## Output Behavior
+
+- **Read-only commands** (parse, validate, balance, etc.) output JSON to stdout
+- **Modification commands** (delete, insert, replace, format) output plain text to stdout when not using `--write`
+- **With `--write`**, results are written to the file (creates `.bak` backup)
 
 ## Global Setup
 
@@ -126,21 +161,21 @@ Example prompts:
 
 ### Available Commands
 
-| Command | Description | Required Args |
+| Command | Description | Input Sources |
 |---------|-------------|---------------|
-| `parse` | Parse Lisp code to JSON AST | `--file` or `--code` |
-| `validate` | Check syntax and report errors | `--file` |
-| `find` | Find form at position | `--file --line --col` |
-| `extract` | Extract forms in a range | `--file --line1 --col1 --line2 --col2` |
-| `top-level` | List top-level forms | `--file` |
-| `delete` | Delete form by position or index | `--file --line --col` or `--file --index` |
-| `insert` | Insert code before/after a form | `--file --line --col --code` |
-| `replace` | Replace form at position | `--file --line --col --code` |
-| `move` | Move form from one position to another | `--file --from-line --from-col --to-line --to-col` |
-| `balance` | Analyze parenthesis balance | `--file` or `--code` |
-| `format` | Reformat source with consistent indentation | `--file` or `--code` |
+| `parse` | Parse Lisp code to JSON AST | `--code`, `--file`, or stdin |
+| `validate` | Check syntax and report errors | `--code`, `--file`, or stdin |
+| `find` | Find form at position | `--code`, `--file`, or stdin + `--line --col` |
+| `extract` | Extract forms in a range | `--code`, `--file`, or stdin + `--line1 --col1 --line2 --col2` |
+| `top-level` | List top-level forms | `--code`, `--file`, or stdin |
+| `delete` | Delete form by position or index | `--code`, `--file`, or stdin + `--line --col` or `--index` |
+| `insert` | Insert code before/after a form | `--code`, `--file`, or stdin + `--line --col --insert` or `--at-end` |
+| `replace` | Replace form at position | `--code`, `--file`, or stdin + `--line --col --replace` |
+| `move` | Move form from one position to another | `--code`, `--file`, or stdin + `--from-line --from-col --to-line --to-col` |
+| `balance` | Analyze parenthesis balance | `--code`, `--file`, or stdin |
+| `format` | Reformat source with consistent indentation | `--code`, `--file`, or stdin |
 
-Optional flags: `--recovery` (error recovery), `--write` (in-place edit), `--validate` (validate inserted code)
+Optional flags: `--recovery` (error recovery), `--write` (in-place edit), `--validate` (validate inserted code), `--quiet` (suppress info output)
 
 ## Editing Workflow
 
@@ -156,22 +191,28 @@ To add new functionality to an existing file:
 1. **Add helper functions** as new top-level forms:
    ```bash
    cl-toolkit insert --file evaluator.lisp --line 11 --col 3 \
-     --code "(defun new-helper (x) ...)" --write
+     --insert "(defun new-helper (x) ...)" --write
    ```
 
 2. **Replace existing forms** with modified versions:
    ```bash
    cl-toolkit replace --file evaluator.lisp --line 20 --col 3 \
-     --code "(defun dispatch-token (tok) ...)" --write
+     --replace "(defun dispatch-token (tok) ...)" --write
    ```
 
 3. **Replace nested subforms** — point to any line/col inside the target:
    ```bash
    cl-toolkit replace --file evaluator.lisp --line 25 --col 5 \
-     --code "(* 5 6)" --write
+     --replace "(* 5 6)" --write
    ```
 
-Both commands output JSON with the modified source. Use `--write` for in-place editing (creates `.bak` backup).
+4. **Pipe-based workflow** — read from stdin, write to stdout:
+   ```bash
+   cat evaluator.lisp | cl-toolkit format > formatted.lisp
+   cat evaluator.lisp | cl-toolkit delete --index 2 > cleaned.lisp
+   ```
+
+Both `--write` commands create a `.bak` backup file.
 
 ## Requirements
 
