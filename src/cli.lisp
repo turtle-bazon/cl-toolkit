@@ -442,8 +442,16 @@
          (quiet (clingon:getopt cmd :quiet))
          (recovery (clingon:getopt cmd :recovery))
          (validate (clingon:getopt cmd :validate-flag))
+         (validate-input (clingon:getopt cmd :validate-input))
          (file (clingon:getopt cmd :file))
          (text (read-input cmd)))
+    ;; Validate input code before operation if requested
+    (when (and validate-input insert-code)
+      (let ((input-ast (cl-toolkit-grammar::parse-lisp-source insert-code)))
+        (when (eq (node-type input-ast) :error)
+          (format *error-output* "Input code validation failed: ~a~%"
+                  (node-value input-ast))
+          (clingon:exit 1))))
     (handler-case
         (let ((result
                 (cond
@@ -492,7 +500,10 @@
               (make-recovery-option)
               (clingon:make-option :flag :long-name "validate"
                                    :description "Validate the inserted code"
-                                   :key :validate-flag))
+                                   :key :validate-flag)
+              (clingon:make-option :flag :long-name "validate-input"
+                                   :description "Validate input code before operation"
+                                   :key :validate-input))
     :handler #'insert/handler))
 
 ;;; ============================================================
@@ -508,8 +519,16 @@
          (write (clingon:getopt cmd :write))
          (quiet (clingon:getopt cmd :quiet))
          (recovery (clingon:getopt cmd :recovery))
+         (validate-input (clingon:getopt cmd :validate-input))
          (file (clingon:getopt cmd :file))
          (text (read-input cmd)))
+    ;; Validate input code before operation if requested
+    (when (and validate-input insert-code)
+      (let ((input-ast (cl-toolkit-grammar::parse-lisp-source insert-code)))
+        (when (eq (node-type input-ast) :error)
+          (format *error-output* "Input code validation failed: ~a~%"
+                  (node-value input-ast))
+          (clingon:exit 1))))
     (handler-case
         (let* ((result
                  (cond
@@ -590,7 +609,10 @@
                                    :description "Insert after the form (default: before)" :key :after)
               (make-write-option)
               (make-quiet-option)
-              (make-recovery-option))
+              (make-recovery-option)
+              (clingon:make-option :flag :long-name "validate-input"
+                                   :description "Validate input code before operation"
+                                   :key :validate-input))
     :handler #'insert-and-validate/handler))
 
 ;;; ============================================================
@@ -701,11 +723,19 @@
          (write (clingon:getopt cmd :write))
          (quiet (clingon:getopt cmd :quiet))
          (recovery (clingon:getopt cmd :recovery))
+         (validate-input (clingon:getopt cmd :validate-input))
          (file (clingon:getopt cmd :file))
          (text (read-input cmd)))
     (unless (and line col replace-code)
       (format *error-output* "Error: --line, --col, and --replace are required~%")
       (clingon:exit 1))
+    ;; Validate input code before operation if requested
+    (when validate-input
+      (let ((input-ast (cl-toolkit-grammar::parse-lisp-source replace-code)))
+        (when (eq (node-type input-ast) :error)
+          (format *error-output* "Input code validation failed: ~a~%"
+                  (node-value input-ast))
+          (clingon:exit 1))))
     (handler-case
         (let ((result (replace-form-at text line col replace-code :recovery recovery)))
           (if write
@@ -738,7 +768,10 @@
                                    :description "Replacement code" :required t :key :replace-code)
              (make-write-option)
              (make-quiet-option)
-             (make-recovery-option))
+             (make-recovery-option)
+             (clingon:make-option :flag :long-name "validate-input"
+                                  :description "Validate input code before operation"
+                                  :key :validate-input))
    :handler #'replace/handler))
 
 ;;; ============================================================
@@ -752,11 +785,19 @@
          (write (clingon:getopt cmd :write))
          (quiet (clingon:getopt cmd :quiet))
          (recovery (clingon:getopt cmd :recovery))
+         (validate-input (clingon:getopt cmd :validate-input))
          (file (clingon:getopt cmd :file))
          (text (read-input cmd)))
     (unless (and line col replace-code)
       (format *error-output* "Error: --line, --col, and --replace are required~%")
       (clingon:exit 1))
+    ;; Validate input code before operation if requested
+    (when validate-input
+      (let ((input-ast (cl-toolkit-grammar::parse-lisp-source replace-code)))
+        (when (eq (node-type input-ast) :error)
+          (format *error-output* "Input code validation failed: ~a~%"
+                  (node-value input-ast))
+          (clingon:exit 1))))
     (handler-case
         (let* ((result (replace-form-at text line col replace-code :recovery recovery))
                (ast (if recovery
@@ -823,9 +864,12 @@
                                   :description "Column number" :required t :key :col)
              (clingon:make-option :string :long-name "replace" :short-name #\r
                                   :description "Replacement code" :required t :key :replace-code)
-             (make-write-option)
-             (make-quiet-option)
-             (make-recovery-option))
+              (make-write-option)
+              (make-quiet-option)
+              (make-recovery-option)
+              (clingon:make-option :flag :long-name "validate-input"
+                                   :description "Validate input code before operation"
+                                   :key :validate-input))
    :handler #'replace-and-validate/handler))
 
 ;;; ============================================================
