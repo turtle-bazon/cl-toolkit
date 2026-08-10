@@ -15,6 +15,9 @@ Lisp code toolkit for structural analysis and editing.
 - **Move**: Move form from one position to another
 - **Balance**: Analyze parenthesis/bracket balance
 - **Format**: Reformat source with consistent indentation
+- **Delete-and-Validate**: Delete form and validate result
+- **Insert-and-Validate**: Insert code and validate result
+- **Replace-and-Validate**: Replace form and validate result
 
 ## Build
 
@@ -174,8 +177,30 @@ Example prompts:
 | `move` | Move form from one position to another | `--code`, `--file`, or stdin + `--from-line --from-col --to-line --to-col` |
 | `balance` | Analyze parenthesis balance | `--code`, `--file`, or stdin |
 | `format` | Reformat source with consistent indentation | `--code`, `--file`, or stdin |
+| `delete-and-validate` | Delete form and validate result | `--code`, `--file`, or stdin + `--line --col` or `--index` |
+| `insert-and-validate` | Insert code and validate result | `--code`, `--file`, or stdin + `--line --col --insert` or `--at-end` |
+| `replace-and-validate` | Replace form and validate result | `--code`, `--file`, or stdin + `--line --col --replace` |
 
 Optional flags: `--recovery` (error recovery), `--write` (in-place edit), `--validate` (validate inserted code), `--quiet` (suppress info output)
+
+### Safe Editing with Validation
+
+The `-and-validate` commands combine modification with validation:
+- **Without `--write`**: Returns JSON with `source`, `balanced`, `errors`, and `warnings`
+- **With `--write`**: Only writes if validation succeeds; exits with error otherwise
+
+```bash
+# Replace and validate (safe mode)
+cl-toolkit replace-and-validate --file myfile.lisp --line 5 --col 2 \
+  --replace "(new-form)" --write
+
+# Insert and validate
+cl-toolkit insert-and-validate --file myfile.lisp --line 1 --col 1 \
+  --insert "(defun helper () ...)" --write
+
+# Delete and validate
+cl-toolkit delete-and-validate --file myfile.lisp --index 2 --write
+```
 
 ## Editing Workflow
 
