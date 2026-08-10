@@ -14,6 +14,23 @@
       (read-sequence content stream)
       content)))
 
+(defun read-stdin ()
+  "Read all input from stdin."
+  (with-output-to-string (out)
+    (loop for line = (read-line *standard-input* nil nil)
+          while line
+          do (write-string line out)
+             (terpri out))))
+
+(defun read-input (cmd)
+  "Read input from --code, --file, or stdin (in that order)."
+  (let ((code (clingon:getopt cmd :code))
+        (file (clingon:getopt cmd :file)))
+    (cond
+      (code code)
+      (file (read-file-to-string file))
+      (t (read-stdin)))))
+
 (defun output-json (node)
   "Write node as JSON to stdout."
   (cl-toolkit-ast::node-to-json node *standard-output*)
@@ -77,28 +94,12 @@
 
 (defun parse/handler (cmd)
   (let* ((recovery (clingon:getopt cmd :recovery))
-         (file (clingon:getopt cmd :file))
-         (code (clingon:getopt cmd :code))
          (parser (if recovery
                      #'cl-toolkit-grammar::parse-with-recovery
-                     #'cl-toolkit-grammar::parse-lisp-source)))
-    (cond
-      (code
-       (let ((ast (funcall parser code)))
-         (output-json ast)))
-      (file
-       (let* ((text (read-file-to-string file))
-              (ast (funcall parser text)))
-         (setf (getf ast :source) file)
-         (output-json ast)))
-      (t
-       (let* ((text (with-output-to-string (out)
-                      (loop for line = (read-line *standard-input* nil nil)
-                            while line
-                            do (write-string line out)
-                               (terpri out))))
-              (ast (funcall parser text)))
-         (output-json ast))))))
+                     #'cl-toolkit-grammar::parse-lisp-source))
+         (text (read-input cmd))
+         (ast (funcall parser text)))
+    (output-json ast)))
 
 (defun parse/command ()
   (clingon:make-command
@@ -128,33 +129,32 @@
 ;;; ============================================================
 
 (defun find/handler (cmd)
-  (let* ((file (clingon:getopt cmd :file))
-         (line (clingon:getopt cmd :line))
-         (col (clingon:getopt cmd :col)))
-    (unless file
-      (format *error-output* "Error: --file is required~%")
-      (clingon:exit 1))
-    (let* ((text (read-file-to-string file))
-           (ast (cl-toolkit-grammar::parse-lisp-source text))
-           (found (find-form-at ast text line col)))
-      (if found
-          (output-json found)
-          (progn
-            (format *error-output* "No form found at line ~a, col ~a~%" line col)
-            (clingon:exit 1))))))
+  (let* ((line (clingon:getopt cmd :line))
+         (col (clingon:getopt cmd :col))
+         (text (read-input cmd))
+         (ast (cl-toolkit-grammar::parse-lisp-source text))
+         (found (find-form-at ast text line col)))
+    (if found
+        (output-json found)
+        (progn
+          (format *error-output* "No form found at line ~a, col ~a~%" line col)
+          (clingon:exit 1)))))
 
 (defun find/command ()
   (clingon:make-command
    :name "find"
-   :usage "--file FILE --line LINE --col COL"
-   :description "Find form at position and output as JSON"
+   :usage "(-f FILE | --code CODE) -l LINE -c COL"
+   :description "Find form at position and return as JSON"
    :options (list
              (clingon:make-option :string
                                   :long-name "file"
                                   :short-name #\f
                                   :description "File to search"
-                                  :required t
                                   :key :file)
+             (clingon:make-option :string
+                                  :long-name "code"
+                                  :description "Inline code to search"
+                                  :key :code)
              (clingon:make-option :integer
                                   :long-name "line"
                                   :short-name #\l
@@ -175,32 +175,30 @@
 ;;; ============================================================
 
 (defun extract/handler (cmd)
-  (let* ((file (clingon:getopt cmd :file))
-         (line1 (clingon:getopt cmd :line1))
+  (let* ((line1 (clingon:getopt cmd :line1))
          (col1 (clingon:getopt cmd :col1))
          (line2 (clingon:getopt cmd :line2))
-         (col2 (clingon:getopt cmd :col2)))
-    (unless file
-      (format *error-output* "Error: --file is required~%")
-      (clingon:exit 1))
-    (let* ((text (read-file-to-string file))
-           (ast (cl-toolkit-grammar::parse-lisp-source text))
-           (forms (extract-range ast text line1 col1 line2 col2)))
-      (format *standard-output* "[")
-      (loop for form in forms
-            for i from 0
-            do (unless (zerop i) (format *standard-output* ","))
-               (cl-toolkit-ast::node-to-json form *standard-output*))
-      (format *standard-output* "]~%"))))
+         (col2 (clingon:getopt cmd :col2))
+         (text (read-input cmd))
+         (ast (cl-toolkit-grammar::parse-lisp-source text))
+         (forms (extract-range ast text line1 col1 line2 col2)))
+    (format *standard-output* "[")
+    (loop for form in forms
+          for i from 0
+          do (unless (zerop i) (format *standard-output* ","))
+             (cl-toolkit-ast::node-to-json form *standard-output*))
+    (format *standard-output* "]~%")))
 
 (defun extract/command ()
   (clingon:make-command
    :name "extract"
-   :usage "--file FILE --line1 L1 --col1 C1 --line2 L2 --col2 C2"
+   :usage "(-f FILE | --code CODE) --line1 L1 --col1 C1 --line2 L2 --col2 C2"
    :description "Extract forms in range as JSON array"
    :options (list
              (clingon:make-option :string :long-name "file" :short-name #\f
-                                  :description "File" :required t :key :file)
+                                  :description "File" :key :file)
+             (clingon:make-option :string :long-name "code"
+                                  :description "Inline code" :key :code)
              (clingon:make-option :integer :long-name "line1" :short-name #\l
                                   :description "Start line" :required t :key :line1)
              (clingon:make-option :integer :long-name "col1" :short-name #\a
@@ -216,47 +214,45 @@
 ;;; ============================================================
 
 (defun validate/handler (cmd)
-  (let ((file (clingon:getopt cmd :file))
-        (recovery (clingon:getopt cmd :recovery-flag)))
-    (unless file
-      (format *error-output* "Error: --file is required~%")
-      (clingon:exit 1))
-    (let* ((text (read-file-to-string file))
-           (ast (if recovery
-                    (cl-toolkit-grammar::parse-with-recovery text)
-                    (cl-toolkit-grammar::parse-lisp-source text)))
-           (result (validate ast)))
-      (format *standard-output* "{")
-      (format *standard-output* "\"balanced\":~a"
-              (if (getf result :balanced) "true" "false"))
-      (format *standard-output* ",\"errors\":[")
-      (loop for err in (getf result :errors)
-            for i from 0
-            do (unless (zerop i) (format *standard-output* ","))
-               (format *standard-output*
-                       "{\"line\":~a,\"col\":~a,\"message\":\"~a\"}"
-                       (if (first err) (format nil "~a" (first err)) "null")
-                       (if (second err) (format nil "~a" (second err)) "null")
-                       (cl-toolkit-ast::escape-json-string (third err))))
-      (format *standard-output* "],\"warnings\":[")
-      (loop for warn in (getf result :warnings)
-            for i from 0
-            do (unless (zerop i) (format *standard-output* ","))
-               (format *standard-output*
-                       "{\"line\":~a,\"col\":~a,\"message\":\"~a\"}"
-                       (if (first warn) (format nil "~a" (first warn)) "null")
-                       (if (second warn) (format nil "~a" (second warn)) "null")
-                       (cl-toolkit-ast::escape-json-string (third warn))))
-      (format *standard-output* "]~%}~%"))))
+  (let* ((recovery (clingon:getopt cmd :recovery-flag))
+         (text (read-input cmd))
+         (ast (if recovery
+                  (cl-toolkit-grammar::parse-with-recovery text)
+                  (cl-toolkit-grammar::parse-lisp-source text)))
+         (result (validate ast)))
+    (format *standard-output* "{")
+    (format *standard-output* "\"balanced\":~a"
+            (if (getf result :balanced) "true" "false"))
+    (format *standard-output* ",\"errors\":[")
+    (loop for err in (getf result :errors)
+          for i from 0
+          do (unless (zerop i) (format *standard-output* ","))
+             (format *standard-output*
+                     "{\"line\":~a,\"col\":~a,\"message\":\"~a\"}"
+                     (if (first err) (format nil "~a" (first err)) "null")
+                     (if (second err) (format nil "~a" (second err)) "null")
+                     (cl-toolkit-ast::escape-json-string (third err))))
+    (format *standard-output* "],\"warnings\":[")
+    (loop for warn in (getf result :warnings)
+          for i from 0
+          do (unless (zerop i) (format *standard-output* ","))
+             (format *standard-output*
+                     "{\"line\":~a,\"col\":~a,\"message\":\"~a\"}"
+                     (if (first warn) (format nil "~a" (first warn)) "null")
+                     (if (second warn) (format nil "~a" (second warn)) "null")
+                     (cl-toolkit-ast::escape-json-string (third warn))))
+    (format *standard-output* "]~%}~%")))
 
 (defun validate/command ()
   (clingon:make-command
    :name "validate"
-   :usage "--file FILE"
-   :description "Validate file and report errors/warnings as JSON"
+   :usage "(-f FILE | --code CODE)"
+   :description "Validate source and report errors/warnings as JSON"
    :options (list
              (clingon:make-option :string :long-name "file" :short-name #\f
-                                  :description "File to validate" :required t :key :file)
+                                  :description "File to validate" :key :file)
+             (clingon:make-option :string :long-name "code"
+                                  :description "Inline code to validate" :key :code)
              (clingon:make-option :flag :long-name "recovery"
                                   :description "Use error recovery parser" :key :recovery-flag))
    :handler #'validate/handler))
@@ -266,28 +262,26 @@
 ;;; ============================================================
 
 (defun top-level/handler (cmd)
-  (let ((file (clingon:getopt cmd :file)))
-    (unless file
-      (format *error-output* "Error: --file is required~%")
-      (clingon:exit 1))
-    (let* ((text (read-file-to-string file))
-           (ast (cl-toolkit-grammar::parse-lisp-source text))
-           (forms (list-top-level ast)))
-      (format *standard-output* "[")
-      (loop for form in forms
-            for i from 0
-            do (unless (zerop i) (format *standard-output* ","))
-               (cl-toolkit-ast::node-to-json form *standard-output*))
-      (format *standard-output* "]~%"))))
+  (let* ((text (read-input cmd))
+         (ast (cl-toolkit-grammar::parse-lisp-source text))
+         (forms (list-top-level ast)))
+    (format *standard-output* "[")
+    (loop for form in forms
+          for i from 0
+          do (unless (zerop i) (format *standard-output* ","))
+             (cl-toolkit-ast::node-to-json form *standard-output*))
+    (format *standard-output* "]~%")))
 
 (defun top-level/command ()
   (clingon:make-command
    :name "top-level"
-   :usage "--file FILE"
+   :usage "(-f FILE | --code CODE)"
    :description "List top-level forms as JSON array"
    :options (list
              (clingon:make-option :string :long-name "file" :short-name #\f
-                                  :description "File to list" :required t :key :file))
+                                  :description "File to list" :key :file)
+             (clingon:make-option :string :long-name "code"
+                                  :description "Inline code" :key :code))
    :handler #'top-level/handler))
 
 ;;; ============================================================
@@ -295,40 +289,34 @@
 ;;; ============================================================
 
 (defun balance/handler (cmd)
-  (let* ((file (clingon:getopt cmd :file))
-         (code (clingon:getopt cmd :code))
-         (text (cond
-                 (code code)
-                 (file (read-file-to-string file))
-                 (t (format *error-output* "Error: --file or --code required~%")
-                    (clingon:exit 1)))))
-    (let ((result (analyze-balance text)))
-      (format *standard-output* "{")
-      (format *standard-output* "\"max_depth\":~a" (getf result :max-depth))
-      (format *standard-output* ",\"final_depth\":~a" (getf result :final-depth))
-      (format *standard-output* ",\"balanced\":~a"
-              (if (= (getf result :final-depth) 0) "true" "false"))
-      (format *standard-output* ",\"lines\":[")
-      (loop for line-info in (getf result :lines)
-            for i from 0
-            do (unless (zerop i) (format *standard-output* ","))
-               (format *standard-output*
-                       "{\"line\":~a,\"depth\":~a,\"delta\":~a}"
-                       (getf line-info :line)
-                       (getf line-info :depth)
-                       (getf line-info :delta)))
-      (format *standard-output* "]")
-      (format *standard-output* ",\"errors\":[")
-      (loop for err in (getf result :errors)
-            for i from 0
-            do (unless (zerop i) (format *standard-output* ","))
-               (format *standard-output*
-                       "{\"line\":~a,\"col\":~a,\"message\":\"~a\"}"
-                       (getf err :line)
-                       (getf err :col)
-                       (cl-toolkit-ast::escape-json-string (getf err :message))))
-      (format *standard-output* "]")
-      (format *standard-output* "}~%"))))
+  (let* ((text (read-input cmd))
+         (result (analyze-balance text)))
+    (format *standard-output* "{")
+    (format *standard-output* "\"max_depth\":~a" (getf result :max-depth))
+    (format *standard-output* ",\"final_depth\":~a" (getf result :final-depth))
+    (format *standard-output* ",\"balanced\":~a"
+            (if (= (getf result :final-depth) 0) "true" "false"))
+    (format *standard-output* ",\"lines\":[")
+    (loop for line-info in (getf result :lines)
+          for i from 0
+          do (unless (zerop i) (format *standard-output* ","))
+             (format *standard-output*
+                     "{\"line\":~a,\"depth\":~a,\"delta\":~a}"
+                     (getf line-info :line)
+                     (getf line-info :depth)
+                     (getf line-info :delta)))
+    (format *standard-output* "]")
+    (format *standard-output* ",\"errors\":[")
+    (loop for err in (getf result :errors)
+          for i from 0
+          do (unless (zerop i) (format *standard-output* ","))
+             (format *standard-output*
+                     "{\"line\":~a,\"col\":~a,\"message\":\"~a\"}"
+                     (getf err :line)
+                     (getf err :col)
+                     (cl-toolkit-ast::escape-json-string (getf err :message))))
+    (format *standard-output* "]")
+    (format *standard-output* "}~%")))
 
 (defun balance/command ()
   (clingon:make-command
@@ -347,22 +335,21 @@
 ;;; ============================================================
 
 (defun format/handler (cmd)
-  (let* ((file (clingon:getopt cmd :file))
-         (code (clingon:getopt cmd :code))
-         (indent (clingon:getopt cmd :indent))
+  (let* ((indent (clingon:getopt cmd :indent))
          (write (clingon:getopt cmd :write))
          (quiet (clingon:getopt cmd :quiet))
-         (text (cond
-                 (code code)
-                 (file (read-file-to-string file))
-                 (t (format *error-output* "Error: --file or --code required~%")
-                    (clingon:exit 1)))))
-    (let ((formatted (format-source text :indent indent)))
-      (if write
-          (progn
-            (write-result-to-file file formatted quiet)
-            (output-edit-result formatted))
-          (output-edit-result formatted)))))
+         (file (clingon:getopt cmd :file))
+         (text (read-input cmd))
+         (formatted (format-source text :indent indent)))
+    (if write
+        (if file
+            (progn
+              (write-result-to-file file formatted quiet)
+              (output-edit-result formatted))
+            (progn
+              (format *error-output* "Error: --write requires --file~%")
+              (clingon:exit 1)))
+        (format *standard-output* "~a" formatted))))
 
 (defun format/command ()
   (clingon:make-command
@@ -387,44 +374,49 @@
 ;;; ============================================================
 
 (defun delete/handler (cmd)
-  (let* ((file (clingon:getopt cmd :file))
-         (line (clingon:getopt cmd :line))
+  (let* ((line (clingon:getopt cmd :line))
          (col (clingon:getopt cmd :col))
          (index (clingon:getopt cmd :index))
          (write (clingon:getopt cmd :write))
          (quiet (clingon:getopt cmd :quiet))
-         (recovery (clingon:getopt cmd :recovery)))
-    (unless file
-      (format *error-output* "Error: --file is required~%")
-      (clingon:exit 1))
-    (let ((text (read-file-to-string file)))
-      (handler-case
-          (let ((result
-                  (cond
-                    (index
-                     (delete-top-level-at text index :recovery recovery))
-                    ((and line col)
-                     (delete-form-at text line col :recovery recovery))
-                    (t
-                     (format *error-output* "Error: --line/--col or --index required~%")
-                     (clingon:exit 1)))))
-            (when write
-              (write-result-to-file file result quiet))
-            (output-edit-result result))
-        (error (c)
-          (output-edit-result nil (format nil "~a" c)))))))
+         (recovery (clingon:getopt cmd :recovery))
+         (file (clingon:getopt cmd :file))
+         (text (read-input cmd)))
+    (handler-case
+        (let ((result
+                (cond
+                  (index
+                   (delete-top-level-at text index :recovery recovery))
+                  ((and line col)
+                   (delete-form-at text line col :recovery recovery))
+                  (t
+                   (format *error-output* "Error: --line/--col or --index required~%")
+                   (clingon:exit 1)))))
+          (if write
+              (if file
+                  (progn
+                    (write-result-to-file file result quiet)
+                    (output-edit-result result))
+                  (progn
+                    (format *error-output* "Error: --write requires --file~%")
+                    (clingon:exit 1)))
+              (format *standard-output* "~a" result)))
+      (error (c)
+        (output-edit-result nil (format nil "~a" c))))))
 
 (defun delete/command ()
   (clingon:make-command
    :name "delete"
-   :usage "--file FILE (--line L --col C | --index N)"
+   :usage "(-f FILE | --code CODE) (--line L --col C | --index N)"
    :description "Delete form at position or by index"
-   :long-description "Delete a form from the source file. ~
+   :long-description "Delete a form from the source. ~
                       Use --line/--col to delete by position, or --index to delete ~
                       the N-th top-level form."
    :options (list
               (clingon:make-option :string :long-name "file" :short-name #\f
-                                   :description "File to edit" :required t :key :file)
+                                   :description "File to edit" :key :file)
+              (clingon:make-option :string :long-name "code"
+                                   :description "Inline code" :key :code)
               (clingon:make-option :integer :long-name "line" :short-name #\l
                                    :description "Line number" :key :line)
               (clingon:make-option :integer :long-name "col" :short-name #\c
@@ -441,51 +433,56 @@
 ;;; ============================================================
 
 (defun insert/handler (cmd)
-  (let* ((file (clingon:getopt cmd :file))
-         (line (clingon:getopt cmd :line))
+  (let* ((line (clingon:getopt cmd :line))
          (col (clingon:getopt cmd :col))
-         (code (clingon:getopt cmd :code))
+         (insert-code (clingon:getopt cmd :insert-code))
          (at-end (clingon:getopt cmd :at-end))
          (after (clingon:getopt cmd :after))
          (write (clingon:getopt cmd :write))
          (quiet (clingon:getopt cmd :quiet))
          (recovery (clingon:getopt cmd :recovery))
-         (validate (clingon:getopt cmd :validate-flag)))
-    (unless file
-      (format *error-output* "Error: --file is required~%")
-      (clingon:exit 1))
-    (let ((text (read-file-to-string file)))
-      (handler-case
-          (let ((result
-                  (cond
-                    (at-end
-                     (insert-form-end text code :validate validate))
-                    ((and line col code)
-                     (insert-form-at text line col code
-                                     :after after :recovery recovery))
-                    (t
-                     (format *error-output* "Error: --line/--col/--code or --at-end required~%")
-                     (clingon:exit 1)))))
-            (when write
-              (write-result-to-file file result quiet))
-            (output-edit-result result))
-        (error (c)
-          (output-edit-result nil (format nil "~a" c)))))))
+         (validate (clingon:getopt cmd :validate-flag))
+         (file (clingon:getopt cmd :file))
+         (text (read-input cmd)))
+    (handler-case
+        (let ((result
+                (cond
+                  (at-end
+                   (insert-form-end text insert-code :validate validate))
+                  ((and line col insert-code)
+                   (insert-form-at text line col insert-code
+                                   :after after :recovery recovery))
+                  (t
+                   (format *error-output* "Error: --line/--col/--insert or --at-end required~%")
+                   (clingon:exit 1)))))
+          (if write
+              (if file
+                  (progn
+                    (write-result-to-file file result quiet)
+                    (output-edit-result result))
+                  (progn
+                    (format *error-output* "Error: --write requires --file~%")
+                    (clingon:exit 1)))
+              (format *standard-output* "~a" result)))
+      (error (c)
+        (output-edit-result nil (format nil "~a" c))))))
 
 (defun insert/command ()
   (clingon:make-command
    :name "insert"
-   :usage "--file FILE --code CODE (--line L --col C | --at-end)"
+   :usage "(-f FILE | --code CODE) --insert CODE (--line L --col C | --at-end)"
    :description "Insert code before/after a form, or at end of file"
    :options (list
               (clingon:make-option :string :long-name "file" :short-name #\f
-                                   :description "File to edit" :required t :key :file)
+                                   :description "File to edit" :key :file)
+              (clingon:make-option :string :long-name "source"
+                                   :description "Source code to edit" :key :source)
               (clingon:make-option :integer :long-name "line" :short-name #\l
                                    :description "Line number" :key :line)
               (clingon:make-option :integer :long-name "col" :short-name #\c
                                    :description "Column number" :key :col)
-              (clingon:make-option :string :long-name "code" :short-name #\C
-                                   :description "Code to insert" :key :code)
+              (clingon:make-option :string :long-name "insert" :short-name #\i
+                                   :description "Code to insert" :key :insert-code)
               (clingon:make-option :flag :long-name "at-end"
                                    :description "Insert at end of file" :key :at-end)
               (clingon:make-option :flag :long-name "after"
@@ -503,39 +500,47 @@
 ;;; ============================================================
 
 (defun replace/handler (cmd)
-  (let* ((file (clingon:getopt cmd :file))
-         (line (clingon:getopt cmd :line))
+  (let* ((line (clingon:getopt cmd :line))
          (col (clingon:getopt cmd :col))
-         (code (clingon:getopt cmd :code))
+         (replace-code (clingon:getopt cmd :replace-code))
          (write (clingon:getopt cmd :write))
          (quiet (clingon:getopt cmd :quiet))
-         (recovery (clingon:getopt cmd :recovery)))
-    (unless (and file line col code)
-      (format *error-output* "Error: --file, --line, --col, and --code are required~%")
+         (recovery (clingon:getopt cmd :recovery))
+         (file (clingon:getopt cmd :file))
+         (text (read-input cmd)))
+    (unless (and line col replace-code)
+      (format *error-output* "Error: --line, --col, and --replace are required~%")
       (clingon:exit 1))
-    (let ((text (read-file-to-string file)))
-      (handler-case
-          (let ((result (replace-form-at text line col code :recovery recovery)))
-            (when write
-              (write-result-to-file file result quiet))
-            (output-edit-result result))
-        (error (c)
-          (output-edit-result nil (format nil "~a" c)))))))
+    (handler-case
+        (let ((result (replace-form-at text line col replace-code :recovery recovery)))
+          (if write
+              (if file
+                  (progn
+                    (write-result-to-file file result quiet)
+                    (output-edit-result result))
+                  (progn
+                    (format *error-output* "Error: --write requires --file~%")
+                    (clingon:exit 1)))
+              (format *standard-output* "~a" result)))
+      (error (c)
+        (output-edit-result nil (format nil "~a" c))))))
 
 (defun replace/command ()
   (clingon:make-command
    :name "replace"
-   :usage "--file FILE --line L --col C --code CODE"
+   :usage "(-f FILE | --code CODE) --line L --col C --replace CODE"
    :description "Replace form at position with new code"
    :options (list
              (clingon:make-option :string :long-name "file" :short-name #\f
-                                  :description "File to edit" :required t :key :file)
+                                  :description "File to edit" :key :file)
+             (clingon:make-option :string :long-name "source"
+                                  :description "Source code to edit" :key :source)
              (clingon:make-option :integer :long-name "line" :short-name #\l
                                   :description "Line number" :required t :key :line)
              (clingon:make-option :integer :long-name "col" :short-name #\c
                                   :description "Column number" :required t :key :col)
-             (clingon:make-option :string :long-name "code" :short-name #\C
-                                  :description "Replacement code" :required t :key :code)
+              (clingon:make-option :string :long-name "replace" :short-name #\r
+                                   :description "Replacement code" :required t :key :replace-code)
              (make-write-option)
              (make-quiet-option)
              (make-recovery-option))
@@ -546,35 +551,40 @@
 ;;; ============================================================
 
 (defun move/handler (cmd)
-  (let* ((file (clingon:getopt cmd :file))
-         (from-line (clingon:getopt cmd :from-line))
+  (let* ((from-line (clingon:getopt cmd :from-line))
          (from-col (clingon:getopt cmd :from-col))
          (to-line (clingon:getopt cmd :to-line))
          (to-col (clingon:getopt cmd :to-col))
          (write (clingon:getopt cmd :write))
          (quiet (clingon:getopt cmd :quiet))
-         (recovery (clingon:getopt cmd :recovery)))
-    (unless file
-      (format *error-output* "Error: --file is required~%")
-      (clingon:exit 1))
-    (let ((text (read-file-to-string file)))
-      (handler-case
-          (let ((result (move-form text from-line from-col to-line to-col
-                                   :recovery recovery)))
-            (if write
-                (write-result-to-file file result quiet)
-                (output-edit-result result)))
-        (error (c)
-          (output-edit-result nil (format nil "~a" c)))))))
+         (recovery (clingon:getopt cmd :recovery))
+         (file (clingon:getopt cmd :file))
+         (text (read-input cmd)))
+    (handler-case
+        (let ((result (move-form text from-line from-col to-line to-col
+                                 :recovery recovery)))
+          (if write
+              (if file
+                  (progn
+                    (write-result-to-file file result quiet)
+                    (output-edit-result result))
+                  (progn
+                    (format *error-output* "Error: --write requires --file~%")
+                    (clingon:exit 1)))
+              (format *standard-output* "~a" result)))
+      (error (c)
+        (output-edit-result nil (format nil "~a" c))))))
 
 (defun move/command ()
   (clingon:make-command
    :name "move"
-   :usage "--file FILE --from-line L1 --from-col C1 --to-line L2 --to-col C2"
+   :usage "(-f FILE | --code CODE) --from-line L1 --from-col C1 --to-line L2 --to-col C2"
    :description "Move form from (L1,C1) to after (L2,C2)"
    :options (list
              (clingon:make-option :string :long-name "file" :short-name #\f
-                                  :description "File to edit" :required t :key :file)
+                                  :description "File to edit" :key :file)
+             (clingon:make-option :string :long-name "source"
+                                  :description "Source code to edit" :key :source)
              (clingon:make-option :integer :long-name "from-line" :short-name #\l
                                   :description "Source line" :required t :key :from-line)
              (clingon:make-option :integer :long-name "from-col" :short-name #\a

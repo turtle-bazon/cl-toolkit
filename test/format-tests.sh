@@ -12,7 +12,7 @@ fail() { echo "FAIL: $1"; echo "  got: $2"; echo "  expected: $3"; FAIL=$((FAIL+
 
 check() {
   local desc="$1" input="$2" expected="$3"
-  result=$($BIN format --code "$input" 2>&1 | python3 -c "import sys,json; print(json.load(sys.stdin)['source'])" 2>&1)
+  result=$($BIN format --code "$input" 2>&1)
   if [ "$result" = "$expected" ]; then
     pass "$desc"
   else

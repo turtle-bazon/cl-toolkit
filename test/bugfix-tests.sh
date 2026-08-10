@@ -50,7 +50,7 @@ echo -e "(defun foo (x)\n  (+ x 1))\n\n(defun bar (y)\n  (* y 2))" > /tmp/test-b
 # Test 1: replace --write should not truncate
 echo "--- replace --write ---"
 cp /tmp/test-bugs.lisp /tmp/test-replace.lisp
-$BIN replace --file /tmp/test-replace.lisp --line 5 --col 3 --code "(+ y 3)" --write 2>&1 > /dev/null
+$BIN replace --file /tmp/test-replace.lisp --line 5 --col 3 --replace "(+ y 3)" --write 2>&1 > /dev/null
 file_test "replace --write keeps full file" "cat /tmp/test-replace.lisp" "defun foo" /tmp/test-replace.lisp
 file_test "replace --write has replacement" "cat /tmp/test-replace.lisp" "+ y 3" /tmp/test-replace.lisp
 file_test "replace --write keeps other forms" "cat /tmp/test-replace.lisp" "defun bar" /tmp/test-replace.lisp
@@ -59,19 +59,19 @@ file_test "replace --write keeps other forms" "cat /tmp/test-replace.lisp" "defu
 echo ""
 echo "--- insert --write ---"
 cp /tmp/test-bugs.lisp /tmp/test-insert.lisp
-$BIN insert --file /tmp/test-insert.lisp --line 1 --col 1 --code "(import 'utils)" --write 2>&1 > /dev/null
+$BIN insert --file /tmp/test-insert.lisp --line 1 --col 1 --insert "(import 'utils)" --write 2>&1 > /dev/null
 file_test "insert --write at correct position" "head -1 /tmp/test-insert.lisp" "import" /tmp/test-insert.lisp
 file_test "insert --write keeps original" "cat /tmp/test-insert.lisp" "defun foo" /tmp/test-insert.lisp
 
-# Test 3: format should return valid JSON
+# Test 3: format should return formatted code
 echo ""
 echo "--- format output ---"
 result=$($BIN format --code "(+ 1 2)" 2>&1)
-if echo "$result" | grep -q "success"; then
-    echo "PASS: format returns valid JSON"
+if echo "$result" | grep -q "(+ 1 2)"; then
+    echo "PASS: format returns formatted code"
     PASS=$((PASS + 1))
 else
-    echo "FAIL: format returns invalid JSON"
+    echo "FAIL: format returns unexpected output"
     echo "  Got: $result"
     FAIL=$((FAIL + 1))
 fi
@@ -90,16 +90,16 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-# Test 5: delete --write should return JSON
+# Test 5: delete should return modified code
 echo ""
 echo "--- delete output ---"
 cp /tmp/test-bugs.lisp /tmp/test-delete.lisp
 result=$($BIN delete --file /tmp/test-delete.lisp --line 4 --col 1 2>&1)
-if echo "$result" | grep -q "success"; then
-    echo "PASS: delete returns valid JSON"
+if echo "$result" | grep -q "defun foo"; then
+    echo "PASS: delete returns modified code"
     PASS=$((PASS + 1))
 else
-    echo "FAIL: delete returns invalid JSON"
+    echo "FAIL: delete returns unexpected output"
     echo "  Got: $result"
     FAIL=$((FAIL + 1))
 fi
@@ -246,7 +246,7 @@ cat > /tmp/test-replace-scope.lisp << 'ENDOFFILE'
     (t
      (values stack nil))))
 ENDOFFILE
-result=$($BIN replace --file /tmp/test-replace-scope.lisp --line 5 --col 1 --code '((or (string= tok "+")) (values stack (+ 1 2)))' 2>&1)
+result=$($BIN replace --file /tmp/test-replace-scope.lisp --line 5 --col 1 --replace '((or (string= tok "+")) (values stack (+ 1 2)))' 2>&1)
 # The replacement should only affect the clause on line 5, not the whole cond
 if echo "$result" | grep -q "defun foo" 2>/dev/null; then
     # This shouldn't happen - the defun foo test was from the earlier test file

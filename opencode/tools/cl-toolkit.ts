@@ -215,7 +215,7 @@ export default tool({
       if (validate) cmdArgs.push("--validate")
       if (after) cmdArgs.push("--after")
       if (line !== undefined && col !== undefined && code) {
-        cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--code", code)
+        cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--insert", code)
       } else {
         return JSON.stringify({ error: "insert command requires line, col, and code" })
       }
@@ -226,7 +226,7 @@ export default tool({
       if (write) cmdArgs.push("--write")
       if (write) cmdArgs.push("--quiet")
       if (recovery) cmdArgs.push("--recovery")
-      cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--code", code)
+      cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--replace", code)
     } else if (command === "move") {
       if (!absolutePath || line1 === undefined || col1 === undefined || line2 === undefined || col2 === undefined) {
         return JSON.stringify({ error: "move command requires filePath, line1, col1, line2, col2" })
