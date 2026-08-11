@@ -246,6 +246,20 @@ To add new functionality to an existing file:
 
 Both `--write` commands create a `.bak` backup file.
 
+## OpenCode Integration
+
+When using cl-toolkit with opencode, use the **cl-toolkit plugin** (not bash) for modification commands. The plugin generates unified diffs on success.
+
+**Correct** (returns diff):
+```typescript
+cl-toolkit({ command: "replace", filePath: "file.lisp", line: 5, col: 2, code: "(new-form)", write: true })
+```
+
+**Wrong** (returns raw JSON):
+```bash
+cl-toolkit replace -f file.lisp --line 5 --col 2 --replace "(new-form)" --write
+```
+
 ## Requirements
 
 - SBCL (Steel Bank Common Lisp)
