@@ -1,81 +1,20 @@
 import { tool } from "@opencode-ai/plugin"
 import { execFileSync } from "child_process"
 import { readFileSync, existsSync } from "fs"
+import { createTwoFilesPatch } from "diff"
 import path from "path"
 
 function generateDiff(original: string, modified: string, filePath: string): string {
-  const originalLines = original.split('\n')
-  const modifiedLines = modified.split('\n')
-  
-  // Remove trailing empty lines from both
-  while (originalLines.length > 0 && originalLines[originalLines.length - 1] === '') {
-    originalLines.pop()
-  }
-  while (modifiedLines.length > 0 && modifiedLines[modifiedLines.length - 1] === '') {
-    modifiedLines.pop()
-  }
-  
   if (original === modified) return ''
-  
-  // Build unified diff
-  const diff: string[] = []
-  diff.push(`--- a/${filePath}`)
-  diff.push(`+++ b/${filePath}`)
-  
-  // Find changed regions and build hunks
-  let i = 0, j = 0
-  const hunks: { startOld: number; startNew: number; lines: string[] }[] = []
-  let currentHunk: { startOld: number; startNew: number; lines: string[] } | null = null
-  
-  while (i < originalLines.length || j < modifiedLines.length) {
-    if (i < originalLines.length && j < modifiedLines.length && originalLines[i] === modifiedLines[j]) {
-      // Context line
-      if (currentHunk) {
-        currentHunk.lines.push(` ${originalLines[i]}`)
-      }
-      i++
-      j++
-    } else {
-      // Start new hunk if needed
-      if (!currentHunk) {
-        currentHunk = { startOld: i, startNew: j, lines: [] }
-        hunks.push(currentHunk)
-      }
-      
-      // Find the extent of changes
-      if (i < originalLines.length && (j >= modifiedLines.length || originalLines.indexOf(modifiedLines[j], i) === -1)) {
-        // Deleted line
-        currentHunk.lines.push(`-${originalLines[i]}`)
-        i++
-      } else if (j < modifiedLines.length) {
-        // Added line
-        currentHunk.lines.push(`+${modifiedLines[j]}`)
-        j++
-      }
-      
-      // Check if we should end this hunk (3 context lines)
-      if (currentHunk && currentHunk.lines.length > 0) {
-        const lastLine = currentHunk.lines[currentHunk.lines.length - 1]
-        if (lastLine.startsWith(' ') && 
-            i < originalLines.length && j < modifiedLines.length &&
-            originalLines[i] === modifiedLines[j] &&
-            originalLines[i+1] === modifiedLines[j+1] &&
-            originalLines[i+2] === modifiedLines[j+2]) {
-          currentHunk = null
-        }
-      }
-    }
-  }
-  
-  // Build hunk headers and output
-  for (const hunk of hunks) {
-    const oldLen = hunk.lines.filter(l => l.startsWith('-') || l.startsWith(' ')).length
-    const newLen = hunk.lines.filter(l => l.startsWith('+') || l.startsWith(' ')).length
-    diff.push(`@@ -${hunk.startOld + 1},${oldLen} +${hunk.startNew + 1},${newLen} @@`)
-    diff.push(...hunk.lines)
-  }
-  
-  return diff.join('\n')
+  return createTwoFilesPatch(
+    `a/${filePath}`,
+    `b/${filePath}`,
+    original,
+    modified,
+    '',
+    '',
+    { context: 3 }
+  )
 }
 
 const CL_TOOLKIT_PATH = path.resolve(__dirname, "../../build/cl-toolkit")
