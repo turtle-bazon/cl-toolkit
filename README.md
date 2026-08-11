@@ -213,7 +213,7 @@ cl-toolkit replace --file myfile.lisp --line 5 --col 2 \
 
 `insert` and `replace` have different semantics:
 
-- **`insert`** adds a new top-level form at the given position. It cannot insert code inside an existing form body.
+- **`insert`** adds new code before/after the form at the given position.
 - **`replace`** replaces the form containing the given line/col, including nested subforms.
 
 ### Modifying Existing Code
