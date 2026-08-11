@@ -328,10 +328,8 @@ export default tool({
           if (originalSource) {
             diff = generateDiff(originalSource, result.source, absolutePath || "file")
           }
-          if (diff) {
-            return diff
-          }
-          return JSON.stringify({
+          // Return diff on success, JSON on error
+          return diff || JSON.stringify({
             success: true,
             source: result.source,
             _summary: `${command} command completed successfully`,
@@ -363,10 +361,8 @@ export default tool({
         if (originalSource && result.source) {
           diff = generateDiff(originalSource, result.source, absolutePath || "file")
         }
-        if (diff) {
-          return diff
-        }
-        return JSON.stringify({
+        // Return diff on success, JSON on error
+        return diff || JSON.stringify({
           source: result.source,
           _summary: "Code reformatted",
         })
