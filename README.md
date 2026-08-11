@@ -177,11 +177,8 @@ Example prompts:
 | `move` | Move form from one position to another | `--code`, `--file`, or stdin + `--from-line --from-col --to-line --to-col` |
 | `balance` | Analyze parenthesis balance | `--code`, `--file`, or stdin |
 | `format` | Reformat source with consistent indentation | `--code`, `--file`, or stdin |
-| `delete-and-validate` | Delete form and validate result | `--code`, `--file`, or stdin + `--line --col` or `--index` |
-| `insert-and-validate` | Insert code and validate result | `--code`, `--file`, or stdin + `--line --col --insert` or `--at-end` |
-| `replace-and-validate` | Replace form and validate result | `--code`, `--file`, or stdin + `--line --col --replace` |
 
-Optional flags: `--recovery` (error recovery), `--write` (in-place edit), `--no-validate` (skip validation), `--quiet` (suppress info output)
+Optional flags: `--recovery` (error recovery), `--write` (in-place edit), `--no-validate-input` (skip input validation), `--no-validate-result` (skip result validation), `--quiet` (suppress info output)
 
 ### Validation
 
@@ -189,7 +186,7 @@ All modification commands (insert, replace, delete) validate both input and resu
 - **Input validation**: Checks that the new code is valid Lisp before performing the operation
 - **Result validation**: Checks that the modified source is valid after the operation
 
-Use `--no-validate` to skip validation when you know the code is valid:
+Use `--no-validate-input` and/or `--no-validate-result` to skip specific validations:
 
 ```bash
 # Validation ON by default (safe mode)
@@ -197,33 +194,19 @@ cl-toolkit replace --file myfile.lisp --line 5 --col 2 \
   --replace "(new-form)"
 # Fails if input or result is invalid
 
-# Skip validation (fast mode, use with caution)
+# Skip input validation only
 cl-toolkit replace --file myfile.lisp --line 5 --col 2 \
-  --replace "(unclosed" --no-validate
-# Proceeds even with invalid code
+  --replace "(unclosed" --no-validate-input
+# Fails only if result is invalid
 
-# -and-validate commands always validate result (unless --no-validate)
-cl-toolkit replace-and-validate --file myfile.lisp --line 5 --col 2 \
-  --replace "(new-form)" --write
-```
+# Skip result validation only
+cl-toolkit replace --file myfile.lisp --line 5 --col 2 \
+  --replace "(unclosed" --no-validate-result
+# Fails only if input is invalid
 
-### Safe Editing with Validation
-
-The `-and-validate` commands combine modification with validation:
-- **Without `--write`**: Returns JSON with `source`, `balanced`, `errors`, and `warnings`
-- **With `--write`**: Only writes if validation succeeds; exits with error otherwise
-
-```bash
-# Replace and validate (safe mode)
-cl-toolkit replace-and-validate --file myfile.lisp --line 5 --col 2 \
-  --replace "(new-form)" --write
-
-# Insert and validate
-cl-toolkit insert-and-validate --file myfile.lisp --line 1 --col 1 \
-  --insert "(defun helper () ...)" --write
-
-# Delete and validate
-cl-toolkit delete-and-validate --file myfile.lisp --index 2 --write
+# Skip all validation (use with caution)
+cl-toolkit replace --file myfile.lisp --line 5 --col 2 \
+  --replace "(unclosed" --no-validate-input --no-validate-result
 ```
 
 ## Editing Workflow

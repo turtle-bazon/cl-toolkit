@@ -118,14 +118,15 @@ export default tool({
   description: "Parse, validate, and edit Common Lisp code using cl-toolkit (PEG parser with error recovery)",
   args: {
     command: tool.schema
-      .enum(["parse", "validate", "find", "extract", "top-level", "delete", "insert", "replace", "move", "balance", "format", "delete-and-validate", "insert-and-validate", "replace-and-validate"])
+      .enum(["parse", "validate", "find", "extract", "top-level", "delete", "insert", "replace", "move", "balance", "format"])
       .describe("Command to execute"),
     code: tool.schema.string().optional().describe("Inline Lisp code to parse/insert/replace"),
     filePath: tool.schema.string().optional().describe("Path to .lisp file"),
     recovery: tool.schema.boolean().optional().describe("Enable error recovery (parse and modification commands)"),
     write: tool.schema.boolean().optional().describe("Write changes to file in-place (modification commands)"),
     validate: tool.schema.boolean().optional().describe("Validate new code syntax (insert --end command)"),
-    noValidate: tool.schema.boolean().optional().describe("Skip input and result validation"),
+    noValidateInput: tool.schema.boolean().optional().describe("Skip input code validation"),
+    noValidateResult: tool.schema.boolean().optional().describe("Skip result validation"),
     after: tool.schema.boolean().optional().describe("Insert after the form instead of before (insert command)"),
     index: tool.schema.number().optional().describe("Top-level form index (delete --index command)"),
     line: tool.schema.number().optional().describe("Line number"),
@@ -137,7 +138,7 @@ export default tool({
     indent: tool.schema.string().optional().describe("Indent string for format command (default: 2 spaces)"),
   },
   async execute(args, context) {
-    const { command, code, filePath, recovery, write, after, validate, noValidate, index, line, col, line1, col1, line2, col2, indent } = args
+    const { command, code, filePath, recovery, write, after, validate, noValidateInput, noValidateResult, index, line, col, line1, col1, line2, col2, indent } = args
 
     // Resolve file path if provided
     let absolutePath: string | undefined
@@ -199,6 +200,8 @@ export default tool({
       if (write) cmdArgs.push("--write")
       if (write) cmdArgs.push("--quiet")
       if (recovery) cmdArgs.push("--recovery")
+      if (noValidateInput) cmdArgs.push("--no-validate-input")
+      if (noValidateResult) cmdArgs.push("--no-validate-result")
       if (index !== undefined) {
         cmdArgs.push("--file", absolutePath, "--index", String(index))
       } else if (line !== undefined && col !== undefined) {
@@ -214,7 +217,8 @@ export default tool({
       if (write) cmdArgs.push("--quiet")
       if (recovery) cmdArgs.push("--recovery")
       if (validate) cmdArgs.push("--validate")
-      if (noValidate) cmdArgs.push("--no-validate")
+      if (noValidateInput) cmdArgs.push("--no-validate-input")
+      if (noValidateResult) cmdArgs.push("--no-validate-result")
       if (after) cmdArgs.push("--after")
       if (line !== undefined && col !== undefined && code) {
         cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--insert", code)
@@ -228,7 +232,8 @@ export default tool({
       if (write) cmdArgs.push("--write")
       if (write) cmdArgs.push("--quiet")
       if (recovery) cmdArgs.push("--recovery")
-      if (noValidate) cmdArgs.push("--no-validate")
+      if (noValidateInput) cmdArgs.push("--no-validate-input")
+      if (noValidateResult) cmdArgs.push("--no-validate-result")
       cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--replace", code)
     } else if (command === "move") {
       if (!absolutePath || line1 === undefined || col1 === undefined || line2 === undefined || col2 === undefined) {
@@ -259,43 +264,6 @@ export default tool({
       if (indent) {
         cmdArgs.push("--indent", indent)
       }
-    } else if (command === "delete-and-validate") {
-      if (!absolutePath) {
-        return JSON.stringify({ error: "delete-and-validate command requires filePath" })
-      }
-      if (write) cmdArgs.push("--write")
-      if (write) cmdArgs.push("--quiet")
-      if (recovery) cmdArgs.push("--recovery")
-      if (index !== undefined) {
-        cmdArgs.push("--file", absolutePath, "--index", String(index))
-      } else if (line !== undefined && col !== undefined) {
-        cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col))
-      } else {
-        return JSON.stringify({ error: "delete-and-validate command requires line/col or index" })
-      }
-    } else if (command === "insert-and-validate") {
-      if (!absolutePath) {
-        return JSON.stringify({ error: "insert-and-validate command requires filePath" })
-      }
-      if (write) cmdArgs.push("--write")
-      if (write) cmdArgs.push("--quiet")
-      if (recovery) cmdArgs.push("--recovery")
-      if (noValidate) cmdArgs.push("--no-validate")
-      if (after) cmdArgs.push("--after")
-      if (line !== undefined && col !== undefined && code) {
-        cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--insert", code)
-      } else {
-        return JSON.stringify({ error: "insert-and-validate command requires line, col, and code" })
-      }
-    } else if (command === "replace-and-validate") {
-      if (!absolutePath || line === undefined || col === undefined || !code) {
-        return JSON.stringify({ error: "replace-and-validate command requires filePath, line, col, and code" })
-      }
-      if (write) cmdArgs.push("--write")
-      if (write) cmdArgs.push("--quiet")
-      if (recovery) cmdArgs.push("--recovery")
-      if (noValidate) cmdArgs.push("--no-validate")
-      cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--replace", code)
     }
 
     try {

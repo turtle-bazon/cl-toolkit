@@ -380,6 +380,7 @@
          (write (clingon:getopt cmd :write))
          (quiet (clingon:getopt cmd :quiet))
          (recovery (clingon:getopt cmd :recovery))
+         (no-validate-result (clingon:getopt cmd :no-validate-result))
          (file (clingon:getopt cmd :file))
          (text (read-input cmd)))
     (handler-case
@@ -392,6 +393,15 @@
                   (t
                    (format *error-output* "Error: --line/--col or --index required~%")
                    (clingon:exit 1)))))
+          ;; Validate result (unless --no-validate-result)
+          (when (and (not no-validate-result) result (> (length result) 0))
+            (let ((result-ast (if recovery
+                                  (cl-toolkit-grammar::parse-with-recovery result)
+                                  (cl-toolkit-grammar::parse-lisp-source result))))
+              (when (eq (node-type result-ast) :error)
+                (format *error-output* "Result validation failed: ~a~%"
+                        (node-value result-ast))
+                (clingon:exit 1))))
           (if write
               (if file
                   (progn
@@ -411,7 +421,8 @@
    :description "Delete form at position or by index"
    :long-description "Delete a form from the source. ~
                       Use --line/--col to delete by position, or --index to delete ~
-                      the N-th top-level form."
+                      the N-th top-level form. Validates result by default; ~
+                      use --no-validate-result to skip."
    :options (list
               (clingon:make-option :string :long-name "file" :short-name #\f
                                    :description "File to edit" :key :file)
@@ -425,7 +436,10 @@
                                    :description "Top-level form index (0-based)" :key :index)
               (make-write-option)
               (make-quiet-option)
-              (make-recovery-option))
+              (make-recovery-option)
+              (clingon:make-option :flag :long-name "no-validate-result"
+                                   :description "Skip result validation"
+                                   :key :no-validate-result))
     :handler #'delete/handler))
 
 ;;; ============================================================
@@ -441,11 +455,12 @@
          (write (clingon:getopt cmd :write))
          (quiet (clingon:getopt cmd :quiet))
          (recovery (clingon:getopt cmd :recovery))
-         (no-validate (clingon:getopt cmd :no-validate))
+         (no-validate-input (clingon:getopt cmd :no-validate-input))
+         (no-validate-result (clingon:getopt cmd :no-validate-result))
          (file (clingon:getopt cmd :file))
          (text (read-input cmd)))
-    ;; Validate input code before operation (unless --no-validate)
-    (when (and (not no-validate) insert-code)
+    ;; Validate input code before operation (unless --no-validate-input)
+    (when (and (not no-validate-input) insert-code)
       (let ((input-ast (cl-toolkit-grammar::parse-lisp-source insert-code)))
         (when (eq (node-type input-ast) :error)
           (format *error-output* "Input code validation failed: ~a~%"
@@ -462,8 +477,8 @@
                   (t
                    (format *error-output* "Error: --line/--col/--insert or --at-end required~%")
                    (clingon:exit 1)))))
-          ;; Validate result (unless --no-validate)
-          (when (not no-validate)
+          ;; Validate result (unless --no-validate-result)
+          (when (not no-validate-result)
             (let ((result-ast (if recovery
                                   (cl-toolkit-grammar::parse-with-recovery result)
                                   (cl-toolkit-grammar::parse-lisp-source result))))
@@ -489,7 +504,8 @@
    :usage "(-f FILE | --code CODE) --insert CODE (--line L --col C | --at-end)"
    :description "Insert code before/after a form, or at end of file"
    :long-description "Insert code at the given position. Validates both input ~
-                      and result by default. Use --no-validate to skip."
+                      and result by default. Use --no-validate-input or ~
+                      --no-validate-result to skip specific validations."
    :options (list
               (clingon:make-option :string :long-name "file" :short-name #\f
                                    :description "File to edit" :key :file)
@@ -508,217 +524,13 @@
               (make-write-option)
               (make-quiet-option)
               (make-recovery-option)
-              (clingon:make-option :flag :long-name "no-validate"
-                                   :description "Skip input and result validation"
-                                   :key :no-validate))
+              (clingon:make-option :flag :long-name "no-validate-input"
+                                   :description "Skip input code validation"
+                                   :key :no-validate-input)
+              (clingon:make-option :flag :long-name "no-validate-result"
+                                   :description "Skip result validation"
+                                   :key :no-validate-result))
     :handler #'insert/handler))
-
-;;; ============================================================
-;;; Insert-and-Validate Command
-;;; ============================================================
-
-(defun insert-and-validate/handler (cmd)
-  (let* ((line (clingon:getopt cmd :line))
-         (col (clingon:getopt cmd :col))
-         (insert-code (clingon:getopt cmd :insert-code))
-         (at-end (clingon:getopt cmd :at-end))
-         (after (clingon:getopt cmd :after))
-         (write (clingon:getopt cmd :write))
-         (quiet (clingon:getopt cmd :quiet))
-         (recovery (clingon:getopt cmd :recovery))
-         (no-validate (clingon:getopt cmd :no-validate))
-         (file (clingon:getopt cmd :file))
-         (text (read-input cmd)))
-    ;; Validate input code before operation (unless --no-validate)
-    (when (and (not no-validate) insert-code)
-      (let ((input-ast (cl-toolkit-grammar::parse-lisp-source insert-code)))
-        (when (eq (node-type input-ast) :error)
-          (format *error-output* "Input code validation failed: ~a~%"
-                  (node-value input-ast))
-          (clingon:exit 1))))
-    (handler-case
-        (let* ((result
-                 (cond
-                   (at-end
-                    (insert-form-end text insert-code))
-                   ((and line col insert-code)
-                    (insert-form-at text line col insert-code
-                                    :after after :recovery recovery))
-                   (t
-                    (format *error-output* "Error: --line/--col/--insert or --at-end required~%")
-                    (clingon:exit 1))))
-               (ast (if recovery
-                        (cl-toolkit-grammar::parse-with-recovery result)
-                        (cl-toolkit-grammar::parse-lisp-source result)))
-               (validation (validate ast)))
-          (if write
-              (if file
-                  (if (getf validation :balanced)
-                      (progn
-                        (write-result-to-file file result quiet)
-                        (output-edit-result result))
-                      (progn
-                        (format *error-output* "Validation failed: ~a~%"
-                                (getf validation :errors))
-                        (clingon:exit 1)))
-                  (progn
-                    (format *error-output* "Error: --write requires --file~%")
-                    (clingon:exit 1)))
-              (progn
-                (format *standard-output* "{\"source\":\"~a\""
-                        (cl-toolkit-ast::escape-json-string result))
-                (format *standard-output* ",\"balanced\":~a"
-                        (if (getf validation :balanced) "true" "false"))
-                (format *standard-output* ",\"errors\":[")
-                (loop for err in (getf validation :errors)
-                      for i from 0
-                      do (unless (zerop i) (format *standard-output* ","))
-                         (format *standard-output*
-                                 "{\"line\":~a,\"col\":~a,\"message\":\"~a\"}"
-                                 (if (first err) (format nil "~a" (first err)) "null")
-                                 (if (second err) (format nil "~a" (second err)) "null")
-                                 (cl-toolkit-ast::escape-json-string (third err))))
-                (format *standard-output* "],\"warnings\":[")
-                (loop for warn in (getf validation :warnings)
-                      for i from 0
-                      do (unless (zerop i) (format *standard-output* ","))
-                         (format *standard-output*
-                                 "{\"line\":~a,\"col\":~a,\"message\":\"~a\"}"
-                                 (if (first warn) (format nil "~a" (first warn)) "null")
-                                 (if (second warn) (format nil "~a" (second warn)) "null")
-                                 (cl-toolkit-ast::escape-json-string (third warn))))
-                (format *standard-output* "]~%}~%"))))
-      (error (c)
-        (output-edit-result nil (format nil "~a" c))))))
-
-(defun insert-and-validate/command ()
-  (clingon:make-command
-   :name "insert-and-validate"
-   :usage "(-f FILE | --code CODE) --insert CODE (--line L --col C | --at-end)"
-   :description "Insert code and validate the result"
-   :long-description "Insert code at the given position, then validate the ~
-                      modified source. When using --write, only writes if ~
-                      validation succeeds. Validates input by default; use ~
-                      --no-validate to skip."
-   :options (list
-              (clingon:make-option :string :long-name "file" :short-name #\f
-                                   :description "File to edit" :key :file)
-              (clingon:make-option :string :long-name "source"
-                                   :description "Source code to edit" :key :source)
-              (clingon:make-option :integer :long-name "line" :short-name #\l
-                                   :description "Line number" :key :line)
-              (clingon:make-option :integer :long-name "col" :short-name #\c
-                                   :description "Column number" :key :col)
-              (clingon:make-option :string :long-name "insert" :short-name #\i
-                                   :description "Code to insert" :key :insert-code)
-              (clingon:make-option :flag :long-name "at-end"
-                                   :description "Insert at end of file" :key :at-end)
-              (clingon:make-option :flag :long-name "after"
-                                   :description "Insert after the form (default: before)" :key :after)
-              (make-write-option)
-              (make-quiet-option)
-              (make-recovery-option)
-              (clingon:make-option :flag :long-name "no-validate"
-                                   :description "Skip input validation"
-                                   :key :no-validate))
-    :handler #'insert-and-validate/handler))
-
-;;; ============================================================
-;;; Delete-and-Validate Command
-;;; ============================================================
-
-(defun delete-and-validate/handler (cmd)
-  (let* ((line (clingon:getopt cmd :line))
-         (col (clingon:getopt cmd :col))
-         (index (clingon:getopt cmd :index))
-         (write (clingon:getopt cmd :write))
-         (quiet (clingon:getopt cmd :quiet))
-         (recovery (clingon:getopt cmd :recovery))
-         (file (clingon:getopt cmd :file))
-         (text (read-input cmd)))
-    (handler-case
-        (let* ((result
-                 (cond
-                   (index
-                    (delete-top-level-at text index :recovery recovery))
-                   ((and line col)
-                    (delete-form-at text line col :recovery recovery))
-                   (t
-                    (format *error-output* "Error: --line/--col or --index required~%")
-                    (clingon:exit 1))))
-               (ast (if (and result (> (length result) 0))
-                        (if recovery
-                            (cl-toolkit-grammar::parse-with-recovery result)
-                            (cl-toolkit-grammar::parse-lisp-source result))
-                        nil))
-               (validation (when ast (validate ast))))
-          (if write
-              (if file
-                  (if (or (null validation) (getf validation :balanced))
-                      (progn
-                        (write-result-to-file file result quiet)
-                        (output-edit-result result))
-                      (progn
-                        (format *error-output* "Validation failed: ~a~%"
-                                (getf validation :errors))
-                        (clingon:exit 1)))
-                  (progn
-                    (format *error-output* "Error: --write requires --file~%")
-                    (clingon:exit 1)))
-              (progn
-                (format *standard-output* "{\"source\":\"~a\""
-                        (cl-toolkit-ast::escape-json-string result))
-                (if validation
-                    (progn
-                      (format *standard-output* ",\"balanced\":~a"
-                              (if (getf validation :balanced) "true" "false"))
-                      (format *standard-output* ",\"errors\":[")
-                      (loop for err in (getf validation :errors)
-                            for i from 0
-                            do (unless (zerop i) (format *standard-output* ","))
-                               (format *standard-output*
-                                       "{\"line\":~a,\"col\":~a,\"message\":\"~a\"}"
-                                       (if (first err) (format nil "~a" (first err)) "null")
-                                       (if (second err) (format nil "~a" (second err)) "null")
-                                       (cl-toolkit-ast::escape-json-string (third err))))
-                      (format *standard-output* "],\"warnings\":[")
-                      (loop for warn in (getf validation :warnings)
-                            for i from 0
-                            do (unless (zerop i) (format *standard-output* ","))
-                               (format *standard-output*
-                                       "{\"line\":~a,\"col\":~a,\"message\":\"~a\"}"
-                                       (if (first warn) (format nil "~a" (first warn)) "null")
-                                       (if (second warn) (format nil "~a" (second warn)) "null")
-                               (cl-toolkit-ast::escape-json-string (third warn))))
-                      (format *standard-output* "]"))
-                    (format *standard-output* ",\"balanced\":true,\"errors\":[],\"warnings\":[]"))
-                (format *standard-output* "}~%"))))
-      (error (c)
-        (output-edit-result nil (format nil "~a" c))))))
-
-(defun delete-and-validate/command ()
-  (clingon:make-command
-   :name "delete-and-validate"
-   :usage "(-f FILE | --code CODE) (--line L --col C | --index N)"
-   :description "Delete form and validate the result"
-   :long-description "Delete a form from the source, then validate the ~
-                      modified source. When using --write, only writes if ~
-                      validation succeeds."
-   :options (list
-              (clingon:make-option :string :long-name "file" :short-name #\f
-                                   :description "File to edit" :key :file)
-              (clingon:make-option :string :long-name "code"
-                                   :description "Inline code" :key :code)
-              (clingon:make-option :integer :long-name "line" :short-name #\l
-                                   :description "Line number" :key :line)
-              (clingon:make-option :integer :long-name "col" :short-name #\c
-                                   :description "Column number" :key :col)
-              (clingon:make-option :integer :long-name "index"
-                                   :description "Top-level form index (0-based)" :key :index)
-              (make-write-option)
-              (make-quiet-option)
-              (make-recovery-option))
-    :handler #'delete-and-validate/handler))
 
 ;;; ============================================================
 ;;; Replace Command
@@ -731,14 +543,15 @@
          (write (clingon:getopt cmd :write))
          (quiet (clingon:getopt cmd :quiet))
          (recovery (clingon:getopt cmd :recovery))
-         (no-validate (clingon:getopt cmd :no-validate))
+         (no-validate-input (clingon:getopt cmd :no-validate-input))
+         (no-validate-result (clingon:getopt cmd :no-validate-result))
          (file (clingon:getopt cmd :file))
          (text (read-input cmd)))
     (unless (and line col replace-code)
       (format *error-output* "Error: --line, --col, and --replace are required~%")
       (clingon:exit 1))
-    ;; Validate input code before operation (unless --no-validate)
-    (when (not no-validate)
+    ;; Validate input code before operation (unless --no-validate-input)
+    (when (not no-validate-input)
       (let ((input-ast (cl-toolkit-grammar::parse-lisp-source replace-code)))
         (when (eq (node-type input-ast) :error)
           (format *error-output* "Input code validation failed: ~a~%"
@@ -746,8 +559,8 @@
           (clingon:exit 1))))
     (handler-case
         (let ((result (replace-form-at text line col replace-code :recovery recovery)))
-          ;; Validate result (unless --no-validate)
-          (when (not no-validate)
+          ;; Validate result (unless --no-validate-result)
+          (when (not no-validate-result)
             (let ((result-ast (if recovery
                                   (cl-toolkit-grammar::parse-with-recovery result)
                                   (cl-toolkit-grammar::parse-lisp-source result))))
@@ -772,6 +585,9 @@
    :name "replace"
    :usage "(-f FILE | --code CODE) --line L --col C --replace CODE"
    :description "Replace form at position with new code"
+   :long-description "Replace a form at the given position. Validates both input ~
+                      and result by default. Use --no-validate-input or ~
+                      --no-validate-result to skip specific validations."
    :options (list
              (clingon:make-option :string :long-name "file" :short-name #\f
                                   :description "File to edit" :key :file)
@@ -786,109 +602,13 @@
              (make-write-option)
              (make-quiet-option)
              (make-recovery-option)
-             (clingon:make-option :flag :long-name "no-validate"
-                                  :description "Skip input and result validation"
-                                  :key :no-validate))
+             (clingon:make-option :flag :long-name "no-validate-input"
+                                  :description "Skip input code validation"
+                                  :key :no-validate-input)
+             (clingon:make-option :flag :long-name "no-validate-result"
+                                  :description "Skip result validation"
+                                  :key :no-validate-result))
    :handler #'replace/handler))
-
-;;; ============================================================
-;;; Replace-and-Validate Command
-;;; ============================================================
-
-(defun replace-and-validate/handler (cmd)
-  (let* ((line (clingon:getopt cmd :line))
-         (col (clingon:getopt cmd :col))
-         (replace-code (clingon:getopt cmd :replace-code))
-         (write (clingon:getopt cmd :write))
-         (quiet (clingon:getopt cmd :quiet))
-         (recovery (clingon:getopt cmd :recovery))
-         (no-validate (clingon:getopt cmd :no-validate))
-         (file (clingon:getopt cmd :file))
-         (text (read-input cmd)))
-    (unless (and line col replace-code)
-      (format *error-output* "Error: --line, --col, and --replace are required~%")
-      (clingon:exit 1))
-    ;; Validate input code before operation (unless --no-validate)
-    (when (not no-validate)
-      (let ((input-ast (cl-toolkit-grammar::parse-lisp-source replace-code)))
-        (when (eq (node-type input-ast) :error)
-          (format *error-output* "Input code validation failed: ~a~%"
-                  (node-value input-ast))
-          (clingon:exit 1))))
-    (handler-case
-        (let* ((result (replace-form-at text line col replace-code :recovery recovery))
-               (ast (if recovery
-                        (cl-toolkit-grammar::parse-with-recovery result)
-                        (cl-toolkit-grammar::parse-lisp-source result)))
-               (validation (validate ast)))
-          (if write
-              (if file
-                  (if (getf validation :balanced)
-                      (progn
-                        (write-result-to-file file result quiet)
-                        (output-edit-result result))
-                      (progn
-                        (format *error-output* "Validation failed: ~a~%"
-                                (getf validation :errors))
-                        (clingon:exit 1)))
-                  (progn
-                    (format *error-output* "Error: --write requires --file~%")
-                    (clingon:exit 1)))
-              (progn
-                (format *standard-output* "{\"source\":\"~a\""
-                        (cl-toolkit-ast::escape-json-string result))
-                (format *standard-output* ",\"balanced\":~a"
-                        (if (getf validation :balanced) "true" "false"))
-                (format *standard-output* ",\"errors\":[")
-                (loop for err in (getf validation :errors)
-                      for i from 0
-                      do (unless (zerop i) (format *standard-output* ","))
-                         (format *standard-output*
-                                 "{\"line\":~a,\"col\":~a,\"message\":\"~a\"}"
-                                 (if (first err) (format nil "~a" (first err)) "null")
-                                 (if (second err) (format nil "~a" (second err)) "null")
-                                 (cl-toolkit-ast::escape-json-string (third err))))
-                (format *standard-output* "],\"warnings\":[")
-                (loop for warn in (getf validation :warnings)
-                      for i from 0
-                      do (unless (zerop i) (format *standard-output* ","))
-                         (format *standard-output*
-                                 "{\"line\":~a,\"col\":~a,\"message\":\"~a\"}"
-                                 (if (first warn) (format nil "~a" (first warn)) "null")
-                                 (if (second warn) (format nil "~a" (second warn)) "null")
-                                 (cl-toolkit-ast::escape-json-string (third warn))))
-                (format *standard-output* "]~%}~%"))))
-      (error (c)
-        (output-edit-result nil (format nil "~a" c))))))
-
-(defun replace-and-validate/command ()
-  (clingon:make-command
-   :name "replace-and-validate"
-   :usage "(-f FILE | --code CODE) --line L --col C --replace CODE"
-   :description "Replace form and validate the result"
-   :long-description "Replace a form at the given position, then validate the ~
-                      modified source. When using --write, only writes if ~
-                      validation succeeds. Without --write, returns JSON with ~
-                      both the modified source and validation results. ~
-                      Validates input by default; use --no-validate to skip."
-   :options (list
-             (clingon:make-option :string :long-name "file" :short-name #\f
-                                  :description "File to edit" :key :file)
-             (clingon:make-option :string :long-name "source"
-                                  :description "Source code to edit" :key :source)
-             (clingon:make-option :integer :long-name "line" :short-name #\l
-                                  :description "Line number" :required t :key :line)
-             (clingon:make-option :integer :long-name "col" :short-name #\c
-                                  :description "Column number" :required t :key :col)
-             (clingon:make-option :string :long-name "replace" :short-name #\r
-                                  :description "Replacement code" :required t :key :replace-code)
-              (make-write-option)
-              (make-quiet-option)
-              (make-recovery-option)
-              (clingon:make-option :flag :long-name "no-validate"
-                                   :description "Skip input validation"
-                                   :key :no-validate))
-   :handler #'replace-and-validate/handler))
 
 ;;; ============================================================
 ;;; Move Command
@@ -994,9 +714,6 @@
                   (delete/command)
                   (insert/command)
                   (replace/command)
-                  (delete-and-validate/command)
-                  (insert-and-validate/command)
-                  (replace-and-validate/command)
                   (move/command)
                   (help/command)
                   (version/command))))
