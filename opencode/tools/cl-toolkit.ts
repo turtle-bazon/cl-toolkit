@@ -15,43 +15,64 @@ function generateDiff(original: string, modified: string, filePath: string): str
     modifiedLines.pop()
   }
   
+  if (original === modified) return ''
+  
+  // Build unified diff
   const diff: string[] = []
+  diff.push(`--- a/${filePath}`)
+  diff.push(`+++ b/${filePath}`)
+  
+  // Find changed regions and build hunks
   let i = 0, j = 0
+  const hunks: { startOld: number; startNew: number; lines: string[] }[] = []
+  let currentHunk: { startOld: number; startNew: number; lines: string[] } | null = null
   
   while (i < originalLines.length || j < modifiedLines.length) {
-    if (i < originalLines.length && j < modifiedLines.length) {
-      if (originalLines[i] === modifiedLines[j]) {
-        diff.push(`  ${originalLines[i]}`)
+    if (i < originalLines.length && j < modifiedLines.length && originalLines[i] === modifiedLines[j]) {
+      // Context line
+      if (currentHunk) {
+        currentHunk.lines.push(` ${originalLines[i]}`)
+      }
+      i++
+      j++
+    } else {
+      // Start new hunk if needed
+      if (!currentHunk) {
+        currentHunk = { startOld: i, startNew: j, lines: [] }
+        hunks.push(currentHunk)
+      }
+      
+      // Find the extent of changes
+      if (i < originalLines.length && (j >= modifiedLines.length || originalLines.indexOf(modifiedLines[j], i) === -1)) {
+        // Deleted line
+        currentHunk.lines.push(`-${originalLines[i]}`)
         i++
+      } else if (j < modifiedLines.length) {
+        // Added line
+        currentHunk.lines.push(`+${modifiedLines[j]}`)
         j++
-      } else {
-        const originalInModified = modifiedLines.indexOf(originalLines[i], j)
-        const modifiedInOriginal = originalLines.indexOf(modifiedLines[j], i)
-        
-        if (originalInModified === -1 && modifiedInOriginal === -1) {
-          diff.push(`- ${originalLines[i]}`)
-          diff.push(`+ ${modifiedLines[j]}`)
-          i++
-          j++
-        } else if (originalInModified !== -1 && (modifiedInOriginal === -1 || originalInModified < modifiedInOriginal)) {
-          while (j < originalInModified) {
-            diff.push(`+ ${modifiedLines[j]}`)
-            j++
-          }
-        } else {
-          while (i < modifiedInOriginal) {
-            diff.push(`- ${originalLines[i]}`)
-            i++
-          }
+      }
+      
+      // Check if we should end this hunk (3 context lines)
+      if (currentHunk && currentHunk.lines.length > 0) {
+        const lastLine = currentHunk.lines[currentHunk.lines.length - 1]
+        if (lastLine.startsWith(' ') && 
+            i < originalLines.length && j < modifiedLines.length &&
+            originalLines[i] === modifiedLines[j] &&
+            originalLines[i+1] === modifiedLines[j+1] &&
+            originalLines[i+2] === modifiedLines[j+2]) {
+          currentHunk = null
         }
       }
-    } else if (i < originalLines.length) {
-      diff.push(`- ${originalLines[i]}`)
-      i++
-    } else {
-      diff.push(`+ ${modifiedLines[j]}`)
-      j++
     }
+  }
+  
+  // Build hunk headers and output
+  for (const hunk of hunks) {
+    const oldLen = hunk.lines.filter(l => l.startsWith('-') || l.startsWith(' ')).length
+    const newLen = hunk.lines.filter(l => l.startsWith('+') || l.startsWith(' ')).length
+    diff.push(`@@ -${hunk.startOld + 1},${oldLen} +${hunk.startNew + 1},${newLen} @@`)
+    diff.push(...hunk.lines)
   }
   
   return diff.join('\n')
@@ -307,10 +328,12 @@ export default tool({
           if (originalSource) {
             diff = generateDiff(originalSource, result.source, absolutePath || "file")
           }
+          if (diff) {
+            return diff
+          }
           return JSON.stringify({
             success: true,
             source: result.source,
-            diff: diff || undefined,
             _summary: `${command} command completed successfully`,
           })
         } else {
@@ -340,9 +363,11 @@ export default tool({
         if (originalSource && result.source) {
           diff = generateDiff(originalSource, result.source, absolutePath || "file")
         }
+        if (diff) {
+          return diff
+        }
         return JSON.stringify({
           source: result.source,
-          diff: diff || undefined,
           _summary: "Code reformatted",
         })
       }
