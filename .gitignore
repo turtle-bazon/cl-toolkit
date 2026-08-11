@@ -4,3 +4,4 @@ lisp/build/
 *.dx64fsl
 *.lx64fsl
 .cache/
+.opencode/
