@@ -12,11 +12,20 @@ console.log('Setting up cl-toolkit...');
 const toolsDir = path.join(targetDir, 'tools');
 fs.mkdirSync(toolsDir, { recursive: true });
 
-// Copy the plugin
+// Create plugins directory
+const pluginsDir = path.join(targetDir, 'plugins');
+fs.mkdirSync(pluginsDir, { recursive: true });
+
+// Copy the tool plugin
 console.log('Installing opencode plugin...');
 const pluginSrc = path.join(scriptDir, 'opencode', 'tools', 'cl-toolkit.ts');
 const pluginDst = path.join(toolsDir, 'cl-toolkit.ts');
 fs.copyFileSync(pluginSrc, pluginDst);
+
+// Copy the diff viewer plugin
+const diffPluginSrc = path.join(scriptDir, 'opencode', 'plugins', 'diff-viewer.js');
+const diffPluginDst = path.join(pluginsDir, 'diff-viewer.js');
+fs.copyFileSync(diffPluginSrc, diffPluginDst);
 
 // Update paths to be absolute
 let content = fs.readFileSync(pluginDst, 'utf-8');
@@ -34,4 +43,5 @@ fs.writeFileSync(pluginDst, content);
 console.log('');
 console.log('Setup complete!');
 console.log(`  Plugin: ${pluginDst}`);
+console.log(`  Diff viewer: ${diffPluginDst}`);
 console.log('  Binary will be built automatically on first use.');
