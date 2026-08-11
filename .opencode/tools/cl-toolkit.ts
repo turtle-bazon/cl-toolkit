@@ -78,8 +78,8 @@ function generateDiff(original: string, modified: string, filePath: string): str
   return diff.join('\n')
 }
 
-const CL_TOOLKIT_PATH = path.resolve(__dirname, "../../build/cl-toolkit")
-const REPO_DIR = path.resolve(__dirname, "../..")  // Updated by setup.sh
+const CL_TOOLKIT_PATH = "/tmp/cl-toolkit/build/cl-toolkit"
+const REPO_DIR = "/tmp/cl-toolkit"
 
 function ensureBinary(): void {
   if (existsSync(CL_TOOLKIT_PATH)) {
