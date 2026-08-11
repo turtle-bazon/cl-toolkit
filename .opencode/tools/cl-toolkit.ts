@@ -15,50 +15,71 @@ function generateDiff(original: string, modified: string, filePath: string): str
     modifiedLines.pop()
   }
   
+  if (original === modified) return ''
+  
+  // Build unified diff
   const diff: string[] = []
+  diff.push(`--- a/${filePath}`)
+  diff.push(`+++ b/${filePath}`)
+  
+  // Find changed regions and build hunks
   let i = 0, j = 0
+  const hunks: { startOld: number; startNew: number; lines: string[] }[] = []
+  let currentHunk: { startOld: number; startNew: number; lines: string[] } | null = null
   
   while (i < originalLines.length || j < modifiedLines.length) {
-    if (i < originalLines.length && j < modifiedLines.length) {
-      if (originalLines[i] === modifiedLines[j]) {
-        diff.push(`  ${originalLines[i]}`)
+    if (i < originalLines.length && j < modifiedLines.length && originalLines[i] === modifiedLines[j]) {
+      // Context line
+      if (currentHunk) {
+        currentHunk.lines.push(` ${originalLines[i]}`)
+      }
+      i++
+      j++
+    } else {
+      // Start new hunk if needed
+      if (!currentHunk) {
+        currentHunk = { startOld: i, startNew: j, lines: [] }
+        hunks.push(currentHunk)
+      }
+      
+      // Find the extent of changes
+      if (i < originalLines.length && (j >= modifiedLines.length || originalLines.indexOf(modifiedLines[j], i) === -1)) {
+        // Deleted line
+        currentHunk.lines.push(`-${originalLines[i]}`)
         i++
+      } else if (j < modifiedLines.length) {
+        // Added line
+        currentHunk.lines.push(`+${modifiedLines[j]}`)
         j++
-      } else {
-        const originalInModified = modifiedLines.indexOf(originalLines[i], j)
-        const modifiedInOriginal = originalLines.indexOf(modifiedLines[j], i)
-        
-        if (originalInModified === -1 && modifiedInOriginal === -1) {
-          diff.push(`- ${originalLines[i]}`)
-          diff.push(`+ ${modifiedLines[j]}`)
-          i++
-          j++
-        } else if (originalInModified !== -1 && (modifiedInOriginal === -1 || originalInModified < modifiedInOriginal)) {
-          while (j < originalInModified) {
-            diff.push(`+ ${modifiedLines[j]}`)
-            j++
-          }
-        } else {
-          while (i < modifiedInOriginal) {
-            diff.push(`- ${originalLines[i]}`)
-            i++
-          }
+      }
+      
+      // Check if we should end this hunk (3 context lines)
+      if (currentHunk && currentHunk.lines.length > 0) {
+        const lastLine = currentHunk.lines[currentHunk.lines.length - 1]
+        if (lastLine.startsWith(' ') && 
+            i < originalLines.length && j < modifiedLines.length &&
+            originalLines[i] === modifiedLines[j] &&
+            originalLines[i+1] === modifiedLines[j+1] &&
+            originalLines[i+2] === modifiedLines[j+2]) {
+          currentHunk = null
         }
       }
-    } else if (i < originalLines.length) {
-      diff.push(`- ${originalLines[i]}`)
-      i++
-    } else {
-      diff.push(`+ ${modifiedLines[j]}`)
-      j++
     }
+  }
+  
+  // Build hunk headers and output
+  for (const hunk of hunks) {
+    const oldLen = hunk.lines.filter(l => l.startsWith('-') || l.startsWith(' ')).length
+    const newLen = hunk.lines.filter(l => l.startsWith('+') || l.startsWith(' ')).length
+    diff.push(`@@ -${hunk.startOld + 1},${oldLen} +${hunk.startNew + 1},${newLen} @@`)
+    diff.push(...hunk.lines)
   }
   
   return diff.join('\n')
 }
 
-const CL_TOOLKIT_PATH = "/tmp/cl-toolkit/build/cl-toolkit"
-const REPO_DIR = "/tmp/cl-toolkit"
+const CL_TOOLKIT_PATH = path.resolve(__dirname, "../../build/cl-toolkit")
+const REPO_DIR = path.resolve(__dirname, "../..")  // Updated by setup.sh
 
 function ensureBinary(): void {
   if (existsSync(CL_TOOLKIT_PATH)) {
@@ -125,6 +146,8 @@ export default tool({
     recovery: tool.schema.boolean().optional().describe("Enable error recovery (parse and modification commands)"),
     write: tool.schema.boolean().optional().describe("Write changes to file in-place (modification commands)"),
     validate: tool.schema.boolean().optional().describe("Validate new code syntax (insert --end command)"),
+    noValidateInput: tool.schema.boolean().optional().describe("Skip input code validation"),
+    noValidateResult: tool.schema.boolean().optional().describe("Skip result validation"),
     after: tool.schema.boolean().optional().describe("Insert after the form instead of before (insert command)"),
     index: tool.schema.number().optional().describe("Top-level form index (delete --index command)"),
     line: tool.schema.number().optional().describe("Line number"),
@@ -136,7 +159,7 @@ export default tool({
     indent: tool.schema.string().optional().describe("Indent string for format command (default: 2 spaces)"),
   },
   async execute(args, context) {
-    const { command, code, filePath, recovery, write, after, validate, index, line, col, line1, col1, line2, col2, indent } = args
+    const { command, code, filePath, recovery, write, after, validate, noValidateInput, noValidateResult, index, line, col, line1, col1, line2, col2, indent } = args
 
     // Resolve file path if provided
     let absolutePath: string | undefined
@@ -198,6 +221,8 @@ export default tool({
       if (write) cmdArgs.push("--write")
       if (write) cmdArgs.push("--quiet")
       if (recovery) cmdArgs.push("--recovery")
+      if (noValidateInput) cmdArgs.push("--no-validate-input")
+      if (noValidateResult) cmdArgs.push("--no-validate-result")
       if (index !== undefined) {
         cmdArgs.push("--file", absolutePath, "--index", String(index))
       } else if (line !== undefined && col !== undefined) {
@@ -213,9 +238,11 @@ export default tool({
       if (write) cmdArgs.push("--quiet")
       if (recovery) cmdArgs.push("--recovery")
       if (validate) cmdArgs.push("--validate")
+      if (noValidateInput) cmdArgs.push("--no-validate-input")
+      if (noValidateResult) cmdArgs.push("--no-validate-result")
       if (after) cmdArgs.push("--after")
       if (line !== undefined && col !== undefined && code) {
-        cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--code", code)
+        cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--insert", code)
       } else {
         return JSON.stringify({ error: "insert command requires line, col, and code" })
       }
@@ -226,7 +253,9 @@ export default tool({
       if (write) cmdArgs.push("--write")
       if (write) cmdArgs.push("--quiet")
       if (recovery) cmdArgs.push("--recovery")
-      cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--code", code)
+      if (noValidateInput) cmdArgs.push("--no-validate-input")
+      if (noValidateResult) cmdArgs.push("--no-validate-result")
+      cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--replace", code)
     } else if (command === "move") {
       if (!absolutePath || line1 === undefined || col1 === undefined || line2 === undefined || col2 === undefined) {
         return JSON.stringify({ error: "move command requires filePath, line1, col1, line2, col2" })
@@ -299,10 +328,10 @@ export default tool({
           if (originalSource) {
             diff = generateDiff(originalSource, result.source, absolutePath || "file")
           }
-          return JSON.stringify({
+          // Return diff on success, JSON on error
+          return diff || JSON.stringify({
             success: true,
             source: result.source,
-            diff: diff || undefined,
             _summary: `${command} command completed successfully`,
           })
         } else {
@@ -332,9 +361,9 @@ export default tool({
         if (originalSource && result.source) {
           diff = generateDiff(originalSource, result.source, absolutePath || "file")
         }
-        return JSON.stringify({
+        // Return diff on success, JSON on error
+        return diff || JSON.stringify({
           source: result.source,
-          diff: diff || undefined,
           _summary: "Code reformatted",
         })
       }
