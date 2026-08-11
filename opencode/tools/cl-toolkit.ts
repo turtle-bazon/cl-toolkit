@@ -125,7 +125,7 @@ export default tool({
     recovery: tool.schema.boolean().optional().describe("Enable error recovery (parse and modification commands)"),
     write: tool.schema.boolean().optional().describe("Write changes to file in-place (modification commands)"),
     validate: tool.schema.boolean().optional().describe("Validate new code syntax (insert --end command)"),
-    validateInput: tool.schema.boolean().optional().describe("Validate input code before operation"),
+    noValidate: tool.schema.boolean().optional().describe("Skip input and result validation"),
     after: tool.schema.boolean().optional().describe("Insert after the form instead of before (insert command)"),
     index: tool.schema.number().optional().describe("Top-level form index (delete --index command)"),
     line: tool.schema.number().optional().describe("Line number"),
@@ -137,7 +137,7 @@ export default tool({
     indent: tool.schema.string().optional().describe("Indent string for format command (default: 2 spaces)"),
   },
   async execute(args, context) {
-    const { command, code, filePath, recovery, write, after, validate, validateInput, index, line, col, line1, col1, line2, col2, indent } = args
+    const { command, code, filePath, recovery, write, after, validate, noValidate, index, line, col, line1, col1, line2, col2, indent } = args
 
     // Resolve file path if provided
     let absolutePath: string | undefined
@@ -214,7 +214,7 @@ export default tool({
       if (write) cmdArgs.push("--quiet")
       if (recovery) cmdArgs.push("--recovery")
       if (validate) cmdArgs.push("--validate")
-      if (validateInput) cmdArgs.push("--validate-input")
+      if (noValidate) cmdArgs.push("--no-validate")
       if (after) cmdArgs.push("--after")
       if (line !== undefined && col !== undefined && code) {
         cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--insert", code)
@@ -228,7 +228,7 @@ export default tool({
       if (write) cmdArgs.push("--write")
       if (write) cmdArgs.push("--quiet")
       if (recovery) cmdArgs.push("--recovery")
-      if (validateInput) cmdArgs.push("--validate-input")
+      if (noValidate) cmdArgs.push("--no-validate")
       cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--replace", code)
     } else if (command === "move") {
       if (!absolutePath || line1 === undefined || col1 === undefined || line2 === undefined || col2 === undefined) {
@@ -280,7 +280,7 @@ export default tool({
       if (write) cmdArgs.push("--write")
       if (write) cmdArgs.push("--quiet")
       if (recovery) cmdArgs.push("--recovery")
-      if (validateInput) cmdArgs.push("--validate-input")
+      if (noValidate) cmdArgs.push("--no-validate")
       if (after) cmdArgs.push("--after")
       if (line !== undefined && col !== undefined && code) {
         cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--insert", code)
@@ -294,7 +294,7 @@ export default tool({
       if (write) cmdArgs.push("--write")
       if (write) cmdArgs.push("--quiet")
       if (recovery) cmdArgs.push("--recovery")
-      if (validateInput) cmdArgs.push("--validate-input")
+      if (noValidate) cmdArgs.push("--no-validate")
       cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--replace", code)
     }
 
