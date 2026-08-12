@@ -12,16 +12,9 @@ Write-Host "Setting up cl-toolkit..."
 $toolsDir = Join-Path $TargetDir "tools"
 New-Item -ItemType Directory -Force -Path $toolsDir | Out-Null
 
-# Create plugins directory
-$pluginsDir = Join-Path $TargetDir "plugins"
-New-Item -ItemType Directory -Force -Path $pluginsDir | Out-Null
-
 # Copy the tool plugin
 Write-Host "Installing opencode plugin..."
 Copy-Item (Join-Path $ScriptDir "opencode\tools\cl-toolkit.ts") $toolsDir
-
-# Copy the diff viewer plugin
-Copy-Item (Join-Path $ScriptDir "opencode\plugins\diff-viewer.js") $pluginsDir
 
 # Update paths to be absolute
 $pluginPath = Join-Path $toolsDir "cl-toolkit.ts"
@@ -33,5 +26,4 @@ Set-Content $pluginPath $content
 Write-Host ""
 Write-Host "Setup complete!"
 Write-Host "  Plugin: $pluginPath"
-Write-Host "  Diff viewer: $(Join-Path $pluginsDir 'diff-viewer.js')"
 Write-Host "  Binary will be built automatically on first use."
