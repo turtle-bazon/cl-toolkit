@@ -36,6 +36,31 @@
   (cl-toolkit-ast::node-to-json node *standard-output*)
   (terpri))
 
+(defun generate-unified-diff (old-text new-text file-path)
+  "Generates a unified diff string between OLD-TEXT and NEW-TEXT."
+  (let ((tmp-old (asdf:system-relative-pathname :cl-toolkit "tmp-old.txt"))
+        (tmp-new (asdf:system-relative-pathname :cl-toolkit "tmp-new.txt")))
+    (unwind-protect
+         (progn
+           (with-open-file (s tmp-old :direction :output :if-exists :supersede)
+             (write-string old-text s))
+           (with-open-file (s tmp-new :direction :output :if-exists :supersede)
+             (write-string new-text s))
+           (multiple-value-bind (diff-output err-output exit-code)
+               (uiop:run-program (list "diff" "-u" 
+                                       "--label" (format nil "a/~A" file-path)
+                                       "--label" (format nil "b/~A" file-path)
+                                       (namestring tmp-old)
+                                       (namestring tmp-new))
+                                 :ignore-error-status t
+                                 :output :string)
+             (declare (ignore err-output exit-code))
+             (if (string= diff-output "")
+                 nil
+                 diff-output)))
+      (when (probe-file tmp-old) (delete-file tmp-old))
+      (when (probe-file tmp-new) (delete-file tmp-new)))))
+
 (defun output-edit-result (text &optional error-msg)
   "Output a JSON edit result."
   (if error-msg
@@ -340,12 +365,15 @@
          (quiet (clingon:getopt cmd :quiet))
          (file (clingon:getopt cmd :file))
          (text (read-input cmd))
+         (original-text (when file (read-file-to-string file)))
          (formatted (format-source text :indent indent)))
     (if write
         (if file
-            (progn
+            (let ((diff (generate-unified-diff original-text formatted file)))
               (write-result-to-file file formatted quiet)
-              (output-edit-result formatted))
+              (if diff
+                  (format *standard-output* "~a" diff)
+                  (format *standard-output* "No changes made.~%")))
             (progn
               (format *error-output* "Error: --write requires --file~%")
               (clingon:exit 1)))
@@ -382,7 +410,8 @@
          (recovery (clingon:getopt cmd :recovery))
          (no-validate-result (clingon:getopt cmd :no-validate-result))
          (file (clingon:getopt cmd :file))
-         (text (read-input cmd)))
+         (text (read-input cmd))
+         (original-text (when file (read-file-to-string file))))
     (handler-case
         (let ((result
                 (cond
@@ -404,9 +433,11 @@
                 (clingon:exit 1))))
           (if write
               (if file
-                  (progn
+                  (let ((diff (generate-unified-diff original-text result file)))
                     (write-result-to-file file result quiet)
-                    (output-edit-result result))
+                    (if diff
+                        (format *standard-output* "~a" diff)
+                        (format *standard-output* "No changes made.~%")))
                   (progn
                     (format *error-output* "Error: --write requires --file~%")
                     (clingon:exit 1)))
@@ -458,7 +489,8 @@
          (no-validate-input (clingon:getopt cmd :no-validate-input))
          (no-validate-result (clingon:getopt cmd :no-validate-result))
          (file (clingon:getopt cmd :file))
-         (text (read-input cmd)))
+         (text (read-input cmd))
+         (original-text (when file (read-file-to-string file))))
     ;; Validate input code before operation (unless --no-validate-input)
     (when (and (not no-validate-input) insert-code)
       (let ((input-ast (cl-toolkit-grammar::parse-lisp-source insert-code)))
@@ -488,9 +520,11 @@
                 (clingon:exit 1))))
           (if write
               (if file
-                  (progn
+                  (let ((diff (generate-unified-diff original-text result file)))
                     (write-result-to-file file result quiet)
-                    (output-edit-result result))
+                    (if diff
+                        (format *standard-output* "~a" diff)
+                        (format *standard-output* "No changes made.~%")))
                   (progn
                     (format *error-output* "Error: --write requires --file~%")
                     (clingon:exit 1)))
@@ -546,7 +580,8 @@
          (no-validate-input (clingon:getopt cmd :no-validate-input))
          (no-validate-result (clingon:getopt cmd :no-validate-result))
          (file (clingon:getopt cmd :file))
-         (text (read-input cmd)))
+         (text (read-input cmd))
+         (original-text (when file (read-file-to-string file))))
     (unless (and line col replace-code)
       (format *error-output* "Error: --line, --col, and --replace are required~%")
       (clingon:exit 1))
@@ -570,9 +605,11 @@
                 (clingon:exit 1))))
           (if write
               (if file
-                  (progn
+                  (let ((diff (generate-unified-diff original-text result file)))
                     (write-result-to-file file result quiet)
-                    (output-edit-result result))
+                    (if diff
+                        (format *standard-output* "~a" diff)
+                        (format *standard-output* "No changes made.~%")))
                   (progn
                     (format *error-output* "Error: --write requires --file~%")
                     (clingon:exit 1)))
@@ -623,15 +660,18 @@
          (quiet (clingon:getopt cmd :quiet))
          (recovery (clingon:getopt cmd :recovery))
          (file (clingon:getopt cmd :file))
-         (text (read-input cmd)))
+         (text (read-input cmd))
+         (original-text (when file (read-file-to-string file))))
     (handler-case
         (let ((result (move-form text from-line from-col to-line to-col
                                  :recovery recovery)))
           (if write
               (if file
-                  (progn
+                  (let ((diff (generate-unified-diff original-text result file)))
                     (write-result-to-file file result quiet)
-                    (output-edit-result result))
+                    (if diff
+                        (format *standard-output* "~a" diff)
+                        (format *standard-output* "No changes made.~%")))
                   (progn
                     (format *error-output* "Error: --write requires --file~%")
                     (clingon:exit 1)))

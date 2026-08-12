@@ -151,7 +151,7 @@ echo ""
 echo "--- format --write ---"
 echo -e "(defun foo (x)\n(+ x 1))" > /tmp/test-format-write.lisp
 result=$($BIN format --file /tmp/test-format-write.lisp --write 2>&1)
-if echo "$result" | grep -q '"success":true'; then
+if echo "$result" | grep -q '^---'; then
     echo "PASS: format --write succeeds"
     PASS=$((PASS + 1))
 else

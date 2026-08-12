@@ -96,8 +96,9 @@ echo "(defun  foo(x)  (+ x 1))" | cl-toolkit format
 ## Output Behavior
 
 - **Read-only commands** (parse, validate, balance, etc.) output JSON to stdout
-- **Modification commands** (delete, insert, replace, format) output plain text to stdout when not using `--write`
-- **With `--write`**, results are written to the file (creates `.bak` backup)
+- **Modification commands** (delete, insert, replace, format, move) output plain text to stdout when not using `--write`
+- **With `--write`**, results are written to the file (creates `.bak` backup) and a unified diff is printed to stdout
+- **No changes** — if the operation produces no actual changes, "No changes made." is printed instead
 
 ## Global Setup
 

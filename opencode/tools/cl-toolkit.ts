@@ -279,6 +279,19 @@ export default tool({
 
     try {
       const output = runClToolkit(cmdArgs, code)
+
+      // When --write is used with modification commands, CLI returns unified diff directly
+      if (write && ["delete", "insert", "replace", "move", "format"].includes(command)) {
+        if (output.startsWith("---")) {
+          return output
+        }
+        // "No changes made."
+        return JSON.stringify({
+          success: true,
+          _summary: output.trim(),
+        })
+      }
+
       const result = JSON.parse(output)
 
       // Add metadata for better display
@@ -313,12 +326,12 @@ export default tool({
 
       // Handle modification commands
       if (["delete", "insert", "replace", "move"].includes(command)) {
+        // Without --write, CLI returns the modified source
         if (result.success) {
           let diff = ""
           if (originalSource) {
             diff = generateDiff(originalSource, result.source, absolutePath || "file")
           }
-          // Return diff on success, JSON on error
           return diff || JSON.stringify({
             success: true,
             source: result.source,
@@ -347,11 +360,11 @@ export default tool({
 
       // Handle format command
       if (command === "format") {
+        // Without --write, CLI returns formatted source
         let diff = ""
         if (originalSource && result.source) {
           diff = generateDiff(originalSource, result.source, absolutePath || "file")
         }
-        // Return diff on success, JSON on error
         return diff || JSON.stringify({
           source: result.source,
           _summary: "Code reformatted",
