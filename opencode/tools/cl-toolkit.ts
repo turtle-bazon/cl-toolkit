@@ -282,8 +282,24 @@ export default tool({
 
       // When --write is used with modification commands, CLI returns unified diff directly
       if (write && ["delete", "insert", "replace", "move", "format"].includes(command)) {
-        if (output.startsWith("---")) {
-          return output
+        if (output.startsWith("---") && absolutePath) {
+          // Count additions and deletions from diff
+          const additions = (output.match(/^\+/gm) || []).length
+          const deletions = (output.match(/^-/gm) || []).length
+          return {
+            title: `${command} ${absolutePath}`,
+            output: output,
+            metadata: {
+              diff: output,
+              filediff: {
+                file: absolutePath,
+                patch: output,
+                additions,
+                deletions,
+              },
+              diagnostics: {},
+            },
+          }
         }
         // "No changes made."
         return JSON.stringify({
