@@ -286,9 +286,9 @@ export default tool({
           // Count additions and deletions from diff
           const additions = (output.match(/^\+/gm) || []).length
           const deletions = (output.match(/^-/gm) || []).length
-          return {
+          // Set metadata for TUI diff rendering
+          context.metadata({
             title: `${command} ${absolutePath}`,
-            output: output,
             metadata: {
               diff: output,
               filediff: {
@@ -299,13 +299,11 @@ export default tool({
               },
               diagnostics: {},
             },
-          }
+          })
+          return output
         }
         // "No changes made."
-        return JSON.stringify({
-          success: true,
-          _summary: output.trim(),
-        })
+        return output
       }
 
       const result = JSON.parse(output)
@@ -345,8 +343,25 @@ export default tool({
         // Without --write, CLI returns the modified source
         if (result.success) {
           let diff = ""
-          if (originalSource) {
-            diff = generateDiff(originalSource, result.source, absolutePath || "file")
+          if (originalSource && absolutePath) {
+            diff = generateDiff(originalSource, result.source, absolutePath)
+          }
+          if (diff) {
+            const additions = (diff.match(/^\+/gm) || []).length
+            const deletions = (diff.match(/^-/gm) || []).length
+            context.metadata({
+              title: `${command} ${absolutePath}`,
+              metadata: {
+                diff,
+                filediff: {
+                  file: absolutePath,
+                  patch: diff,
+                  additions,
+                  deletions,
+                },
+                diagnostics: {},
+              },
+            })
           }
           return diff || JSON.stringify({
             success: true,
@@ -378,8 +393,25 @@ export default tool({
       if (command === "format") {
         // Without --write, CLI returns formatted source
         let diff = ""
-        if (originalSource && result.source) {
-          diff = generateDiff(originalSource, result.source, absolutePath || "file")
+        if (originalSource && result.source && absolutePath) {
+          diff = generateDiff(originalSource, result.source, absolutePath)
+        }
+        if (diff) {
+          const additions = (diff.match(/^\+/gm) || []).length
+          const deletions = (diff.match(/^-/gm) || []).length
+          context.metadata({
+            title: `format ${absolutePath}`,
+            metadata: {
+              diff,
+              filediff: {
+                file: absolutePath,
+                patch: diff,
+                additions,
+                deletions,
+              },
+              diagnostics: {},
+            },
+          })
         }
         return diff || JSON.stringify({
           source: result.source,
