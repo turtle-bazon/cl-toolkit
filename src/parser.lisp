@@ -103,7 +103,7 @@
 ;;; --- Position-based queries ---
 
 (defun find-form-at (ast text line col)
-  "Find the form to operate on at the given LINE and COL (1-indexed).
+  "Find the form to operate on at the given LINE and COL (0-indexed).
    Finds the smallest form that contains the target offset and whose start
    line is at or before LINE. This means the cursor can be anywhere inside
    a form and it will target that form, not drill into subforms.
@@ -142,7 +142,7 @@
 
 (defun extract-range (ast text start-line start-col end-line end-col)
   "Extract a range of source text as an AST subtree.
-   Returns a list of nodes that overlap the given range."
+   Returns a list of nodes that overlap the given range (0-indexed)."
   (let ((start-offset (cl-toolkit-ast:offset-to-line-col-inverse text start-line start-col))
         (end-offset (cl-toolkit-ast:offset-to-line-col-inverse text end-line end-col)))
     (extract-nodes-in-range ast start-offset end-offset)))
@@ -203,7 +203,7 @@
                    (subseq text actual-end)))))
 
 (defun delete-form-at (text line col &key recovery)
-  "Delete the form at LINE, COL (1-indexed) from TEXT.
+  "Delete the form at LINE, COL (0-indexed) from TEXT.
    When RECOVERY is T, use error recovery parser.
    Returns the modified source string."
   (let* ((ast (parse-for-edit text recovery))
@@ -228,43 +228,60 @@
     (delete-node-from-text text (nth index forms))))
 
 (defun insert-form-at (text line col new-code &key recovery)
-  "Insert NEW-CODE at LINE, COL (1-indexed) in TEXT.
-   Inserts before the form at the given position.
-   If position is past end of line/file, pads with spaces.
+  "Insert NEW-CODE before the form at LINE, COL (0-indexed) in TEXT.
+   If we're inside a symbol, finds the containing list.
    When RECOVERY is T, use error recovery parser.
    Returns the modified source string."
   (let* ((ast (parse-for-edit text recovery))
          (node (find-form-at ast text line col)))
     (if node
-        (let ((node-line (node-line node))
-              (node-col (node-col node)))
-          (when (and node-line node-col)
-            (format *error-output* "Inserting before form at line ~a, col ~a: ~a~%"
-                    node-line node-col
-                    (or (node-name node) (node-type node))))
-          (let ((insert-at (node-start node)))
-            (let ((code (if (and (> (length new-code) 0)
-                                 (char= (char new-code (1- (length new-code))) #\Newline))
-                            new-code
-                            (concatenate 'string new-code (string #\Newline)))))
-              (concatenate 'string
-                           (subseq text 0 insert-at)
-                           code
-                           (subseq text insert-at)))))
-        ;; Position past end — pad with spaces
-        (let* ((line-start (loop for i from (1- (length text)) downto 0
-                                 when (char= (char text i) #\Newline)
-                                   return (1+ i)
-                                 finally (return 0)))
-               (current-col (- (length text) line-start))
-               (pad-len (max 0 (- col current-col 1)))
-               (padding (make-string pad-len :initial-element #\Space))
-               (code (if (and (> (length new-code) 0)
-                              (char= (char new-code (1- (length new-code))) #\Newline))
-                         new-code
-                         (concatenate 'string new-code (string #\Newline)))))
-          (format *error-output* "Position past end, padding with spaces~%")
-          (concatenate 'string (subseq text 0 (length text)) padding code)))))
+        (let ((insert-before (node-start node)))
+          (format *error-output* "Inserting before form at offset ~a~%" insert-before)
+          ;; If we're at a symbol, check if there's a containing list at the same line
+          ;; that starts at an earlier column (the opening paren)
+          (when (not (node-list-p node))
+            ;; We're inside a symbol, find the parent list
+            (labels ((find-parent (n target)
+                       (when (and (node-children n) (not (eq n target)))
+                         (dolist (child (node-children n))
+                           (when (eq child target)
+                             (return n))
+                           (let ((result (find-parent child target)))
+                             (when result (return result)))))))
+              (let ((parent (find-parent ast node)))
+                (when (and parent
+                           (node-list-p parent)
+                           (< (node-start parent) insert-before)
+                           (<= insert-before (node-end parent)))
+                  (setf insert-before (node-start parent))))))
+          ;; Insert before the form
+          (concatenate 'string
+                       (subseq text 0 insert-before)
+                       new-code
+                       (subseq text insert-before)))
+        ;; No form found — insert at end
+        (progn
+          (format *error-output* "No form found, inserting at end~%")
+          (concatenate 'string text new-code)))))
+
+(defun append-form-at (text line col new-code &key recovery)
+  "Append NEW-CODE after the form at LINE, COL (0-indexed) in TEXT.
+   When RECOVERY is T, use error recovery parser.
+   Returns the modified source string."
+  (let* ((ast (parse-for-edit text recovery))
+         (node (find-form-at ast text line col)))
+    (if node
+        (let* ((node-end (node-end node)))
+          (format *error-output* "Appending after form at offset ~a~%" node-end)
+          ;; Insert after the form
+          (concatenate 'string
+                       (subseq text 0 node-end)
+                       new-code
+                       (subseq text node-end)))
+        ;; No form found — append to end
+        (progn
+          (format *error-output* "No form found, appending to end~%")
+          (concatenate 'string text new-code)))))
 
 (defun insert-form-end (text new-code &key validate)
   "Insert NEW-CODE at the end of TEXT.
@@ -284,7 +301,7 @@
                  code)))
 
 (defun replace-form-at (text line col new-code &key recovery)
-  "Replace the form at LINE, COL (1-indexed) with NEW-CODE in TEXT.
+  "Replace the form at LINE, COL (0-indexed) with NEW-CODE in TEXT.
    When RECOVERY is T, use error recovery parser.
    Returns the modified source string."
   (let* ((ast (parse-for-edit text recovery))

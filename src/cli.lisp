@@ -445,9 +445,9 @@
       (error (c)
         (output-edit-result nil (format nil "~a" c))))))
 
-(defun delete/command ()
+(defun delete-form/command ()
   (clingon:make-command
-   :name "delete"
+   :name "delete-form"
    :usage "(-f FILE | --code CODE) (--line L --col C | --index N)"
    :description "Delete form at position or by index"
    :long-description "Delete a form from the source. ~
@@ -474,7 +474,68 @@
     :handler #'delete/handler))
 
 ;;; ============================================================
-;;; Insert Command
+;;; Insert-at Command (simple text insertion at position)
+;;; ============================================================
+
+(defun insert-at/handler (cmd)
+  "Insert text at cursor position without form logic."
+  (let* ((line (clingon:getopt cmd :line))
+         (col (clingon:getopt cmd :col))
+         (insert-code (clingon:getopt cmd :insert-code))
+         (write (clingon:getopt cmd :write))
+         (quiet (clingon:getopt cmd :quiet))
+         (file (clingon:getopt cmd :file))
+         (text (read-input cmd))
+         (original-text (when file (read-file-to-string file))))
+    (unless (and line col insert-code)
+      (format *error-output* "Error: --line, --col, and --insert are required~%")
+      (clingon:exit 1))
+    ;; Find the offset from line/col
+    (let ((offset (cl-toolkit-ast::offset-to-line-col-inverse text line col)))
+      (when (null offset)
+        (format *error-output* "Error: Invalid position (~a, ~a)~%" line col)
+        (clingon:exit 1))
+      ;; Insert text at offset
+      (let ((result (concatenate 'string
+                                 (subseq text 0 offset)
+                                 insert-code
+                                 (subseq text offset))))
+        (if write
+            (if file
+                (let ((diff (generate-unified-diff original-text result file)))
+                  (write-result-to-file file result quiet)
+                  (if diff
+                      (format *standard-output* "~a" diff)
+                      (format *standard-output* "No changes made.~%")))
+                (progn
+                  (format *error-output* "Error: --write requires --file~%")
+                  (clingon:exit 1)))
+            (format *standard-output* "~a" result))))))
+
+(defun insert-at/command ()
+  (clingon:make-command
+   :name "insert"
+   :usage "(-f FILE | --code CODE) --insert CODE --line L --col C"
+   :description "Insert text at cursor position"
+   :long-description "Insert code at the given cursor position. Unlike insert-form, ~
+                      this simply inserts text at the position without form detection."
+   :options (list
+             (clingon:make-option :string :long-name "file" :short-name #\f
+                                  :description "File to edit" :key :file)
+             (clingon:make-option :string :long-name "source"
+                                  :description "Source code to edit" :key :source)
+             (clingon:make-option :integer :long-name "line" :short-name #\l
+                                  :description "Line number" :required t :key :line)
+             (clingon:make-option :integer :long-name "col" :short-name #\c
+                                  :description "Column number" :required t :key :col)
+             (clingon:make-option :string :long-name "insert" :short-name #\i
+                                  :description "Code to insert" :required t :key :insert-code)
+             (make-write-option)
+             (make-quiet-option))
+   :handler #'insert-at/handler))
+
+;;; ============================================================
+;;; Insert Command (form-level insertion)
 ;;; ============================================================
 
 (defun insert/handler (cmd)
@@ -527,9 +588,9 @@
       (error (c)
         (output-edit-result nil (format nil "~a" c))))))
 
-(defun insert/command ()
+(defun insert-form/command ()
   (clingon:make-command
-   :name "insert"
+   :name "insert-form"
    :usage "(-f FILE | --code CODE) --insert CODE --line L --col C"
     :description "Insert code before a form, or at end of file"
    :long-description "Insert code at the given position. Validates both input ~
@@ -556,6 +617,86 @@
                                    :description "Skip result validation"
                                    :key :no-validate-result))
     :handler #'insert/handler))
+
+;;; ============================================================
+;;; Append Form Command
+;;; ============================================================
+
+(defun append/handler (cmd)
+  (let* ((line (clingon:getopt cmd :line))
+         (col (clingon:getopt cmd :col))
+         (insert-code (clingon:getopt cmd :insert-code))
+         (write (clingon:getopt cmd :write))
+         (quiet (clingon:getopt cmd :quiet))
+         (recovery (clingon:getopt cmd :recovery))
+         (no-validate-input (clingon:getopt cmd :no-validate-input))
+         (no-validate-result (clingon:getopt cmd :no-validate-result))
+         (file (clingon:getopt cmd :file))
+         (text (read-input cmd))
+         (original-text (when file (read-file-to-string file))))
+    (unless (and line col insert-code)
+      (format *error-output* "Error: --line, --col, and --insert are required~%")
+      (clingon:exit 1))
+    ;; Validate input code before operation (unless --no-validate-input)
+    (when (not no-validate-input)
+      (let ((input-ast (cl-toolkit-grammar::parse-lisp-source insert-code)))
+        (when (eq (node-type input-ast) :error)
+          (format *error-output* "Input code validation failed: ~a~%"
+                  (node-value input-ast))
+          (clingon:exit 1))))
+    (handler-case
+        (let ((result (append-form-at text line col insert-code :recovery recovery)))
+          ;; Validate result (unless --no-validate-result)
+          (when (not no-validate-result)
+            (let ((result-ast (if recovery
+                                  (cl-toolkit-grammar::parse-with-recovery result)
+                                  (cl-toolkit-grammar::parse-lisp-source result))))
+              (when (eq (node-type result-ast) :error)
+                (format *error-output* "Result validation failed: ~a~%"
+                        (node-value result-ast))
+                (clingon:exit 1))))
+          (if write
+              (if file
+                  (let ((diff (generate-unified-diff original-text result file)))
+                    (write-result-to-file file result quiet)
+                    (if diff
+                        (format *standard-output* "~a" diff)
+                        (format *standard-output* "No changes made.~%")))
+                  (progn
+                    (format *error-output* "Error: --write requires --file~%")
+                    (clingon:exit 1)))
+              (format *standard-output* "~a" result)))
+      (error (c)
+        (output-edit-result nil (format nil "~a" c))))))
+
+(defun append-form/command ()
+  (clingon:make-command
+   :name "append-form"
+   :usage "(-f FILE | --code CODE) --insert CODE --line L --col C"
+   :description "Insert code after a form"
+   :long-description "Insert code after the form at the given position. ~
+                      Unlike insert-form which inserts before, this appends after."
+   :options (list
+              (clingon:make-option :string :long-name "file" :short-name #\f
+                                   :description "File to edit" :key :file)
+              (clingon:make-option :string :long-name "source"
+                                   :description "Source code to edit" :key :source)
+              (clingon:make-option :integer :long-name "line" :short-name #\l
+                                   :description "Line number" :key :line)
+              (clingon:make-option :integer :long-name "col" :short-name #\c
+                                   :description "Column number" :key :col)
+               (clingon:make-option :string :long-name "insert" :short-name #\i
+                                    :description "Code to insert" :key :insert-code)
+               (make-write-option)
+              (make-quiet-option)
+              (make-recovery-option)
+              (clingon:make-option :flag :long-name "no-validate-input"
+                                   :description "Skip input code validation"
+                                   :key :no-validate-input)
+              (clingon:make-option :flag :long-name "no-validate-result"
+                                   :description "Skip result validation"
+                                   :key :no-validate-result))
+   :handler #'append/handler))
 
 ;;; ============================================================
 ;;; Replace Command
@@ -608,9 +749,9 @@
       (error (c)
         (output-edit-result nil (format nil "~a" c))))))
 
-(defun replace/command ()
+(defun replace-form/command ()
   (clingon:make-command
-   :name "replace"
+   :name "replace-form"
    :usage "(-f FILE | --code CODE) --line L --col C --replace CODE"
    :description "Replace form at position with new code"
    :long-description "Replace a form at the given position. Validates both input ~
@@ -735,19 +876,21 @@
    :license "MIT"
    :handler (lambda (cmd) (clingon:print-usage-and-exit cmd t))
    :sub-commands (list
-                  (parse/command)
-                  (find/command)
-                  (extract/command)
-                  (validate/command)
-                  (top-level/command)
-                  (balance/command)
-                  (format/command)
-                  (delete/command)
-                  (insert/command)
-                  (replace/command)
-                  (move/command)
-                  (help/command)
-                  (version/command))))
+                   (parse/command)
+                   (find/command)
+                   (extract/command)
+                   (validate/command)
+                   (top-level/command)
+                   (balance/command)
+                   (format/command)
+                   (delete-form/command)
+                   (insert-form/command)
+                   (append-form/command)
+                   (replace-form/command)
+                   (insert-at/command)
+                   (move/command)
+                   (help/command)
+                   (version/command))))
 
 ;;; ============================================================
 ;;; Entry Points

@@ -10,14 +10,11 @@ Lisp code toolkit for structural analysis and editing.
 - **Extract**: Extract forms in a range
 - **Top-level**: List top-level forms
 - **Delete**: Delete form by position or index
-- **Insert**: Insert code before a form
+- **Insert**: Insert code before a form (or after if past end)
 - **Replace**: Replace form at position
 - **Move**: Move form from one position to another
 - **Balance**: Analyze parenthesis/bracket balance
 - **Format**: Reformat source with consistent indentation
-- **Delete-and-Validate**: Delete form and validate result
-- **Insert-and-Validate**: Insert code and validate result
-- **Replace-and-Validate**: Replace form and validate result
 
 ## Build
 
@@ -173,7 +170,7 @@ Example prompts:
 | `extract` | Extract forms in a range | `--code`, `--file`, or stdin + `--line1 --col1 --line2 --col2` |
 | `top-level` | List top-level forms | `--code`, `--file`, or stdin |
 | `delete` | Delete form by position or index | `--code`, `--file`, or stdin + `--line --col` or `--index` |
-| `insert` | Insert code before a form (pads with spaces if past EOF) | `--code`, `--file`, or stdin + `--line --col --insert` |
+| `insert` | Insert code before/after form (appends if past end) | `--code`, `--file`, or stdin + `--line --col --insert` |
 | `replace` | Replace form at position | `--code`, `--file`, or stdin + `--line --col --replace` |
 | `move` | Move form from one position to another | `--code`, `--file`, or stdin + `--from-line --from-col --to-line --to-col` |
 | `balance` | Analyze parenthesis balance | `--code`, `--file`, or stdin |
@@ -210,11 +207,39 @@ cl-toolkit replace --file myfile.lisp --line 5 --col 2 \
   --replace "(unclosed" --no-validate-input --no-validate-result
 ```
 
+## Insert Behavior
+
+The `insert` command has special handling for different positions:
+
+### Same Line as Form
+
+- **Before form** (col < form's start column): Inserts before the form
+- **Inside form** (col is within the form): Inserts before the form
+- **At end of form** (col = form's end column): Appends after the form
+- **Past end of form** (col > form's end column): Appends after the form
+
+### Different Line
+
+- **New line** (line > form's line): Adds a newline, then the code
+
+### Examples
+
+Given `(defun a () 1)` (14 characters):
+
+| Position | Result | Behavior |
+|----------|--------|----------|
+| (1,1) | `(defun b () 2)\n(defun a () 1)` | Before first form |
+| (1,7) | `(defun b () 2)\n(defun a () 1)` | Inside form (before) |
+| (1,14) | `(defun a () 1)(defun b () 2)` | At end of form |
+| (1,15) | `(defun a () 1)(defun b () 2)` | One past end |
+| (1,16) | `(defun a () 1)(defun b () 2)` | Two past end |
+| (2,1) | `(defun a () 1)\n(defun b () 2)` | New line |
+
 ## Editing Workflow
 
 `insert` and `replace` have different semantics:
 
-- **`insert`** adds new code before the form at the given position.
+- **`insert`** adds new code before the form at the given position, or after if past the form's end.
 - **`replace`** replaces the form containing the given line/col, including nested subforms.
 
 ### Modifying Existing Code

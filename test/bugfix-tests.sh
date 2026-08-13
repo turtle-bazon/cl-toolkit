@@ -47,21 +47,21 @@ echo ""
 # Setup test file
 echo -e "(defun foo (x)\n  (+ x 1))\n\n(defun bar (y)\n  (* y 2))" > /tmp/test-bugs.lisp
 
-# Test 1: replace --write should not truncate
-echo "--- replace --write ---"
+# Test 1: replace-form --write should not truncate
+echo "--- replace-form --write ---"
 cp /tmp/test-bugs.lisp /tmp/test-replace.lisp
-$BIN replace --file /tmp/test-replace.lisp --line 5 --col 3 --replace "(+ y 3)" --write 2>&1 > /dev/null
-file_test "replace --write keeps full file" "cat /tmp/test-replace.lisp" "defun foo" /tmp/test-replace.lisp
-file_test "replace --write has replacement" "cat /tmp/test-replace.lisp" "+ y 3" /tmp/test-replace.lisp
-file_test "replace --write keeps other forms" "cat /tmp/test-replace.lisp" "defun bar" /tmp/test-replace.lisp
+$BIN replace-form --file /tmp/test-replace.lisp --line 4 --col 2 --replace "(+ y 3)" --write 2>&1 > /dev/null
+file_test "replace-form --write keeps full file" "cat /tmp/test-replace.lisp" "defun foo" /tmp/test-replace.lisp
+file_test "replace-form --write has replacement" "cat /tmp/test-replace.lisp" "+ y 3" /tmp/test-replace.lisp
+file_test "replace-form --write keeps other forms" "cat /tmp/test-replace.lisp" "defun bar" /tmp/test-replace.lisp
 
-# Test 2: insert --write should respect position
+# Test 2: insert-form --write should respect position
 echo ""
-echo "--- insert --write ---"
+echo "--- insert-form --write ---"
 cp /tmp/test-bugs.lisp /tmp/test-insert.lisp
-$BIN insert --file /tmp/test-insert.lisp --line 1 --col 1 --insert "(import 'utils)" --write 2>&1 > /dev/null
-file_test "insert --write at correct position" "head -1 /tmp/test-insert.lisp" "import" /tmp/test-insert.lisp
-file_test "insert --write keeps original" "cat /tmp/test-insert.lisp" "defun foo" /tmp/test-insert.lisp
+$BIN insert-form --file /tmp/test-insert.lisp --line 0 --col 0 --insert "(import 'utils)" --write 2>&1 > /dev/null
+file_test "insert-form --write at correct position" "head -1 /tmp/test-insert.lisp" "import" /tmp/test-insert.lisp
+file_test "insert-form --write keeps original" "cat /tmp/test-insert.lisp" "defun foo" /tmp/test-insert.lisp
 
 # Test 3: format should return formatted code
 echo ""
@@ -90,13 +90,13 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-# Test 5: delete should return modified code
+# Test 5: delete-form should return modified code
 echo ""
-echo "--- delete output ---"
+echo "--- delete-form output ---"
 cp /tmp/test-bugs.lisp /tmp/test-delete.lisp
-result=$($BIN delete --file /tmp/test-delete.lisp --line 4 --col 1 2>&1)
+result=$($BIN delete-form --file /tmp/test-delete.lisp --line 4 --col 1 2>&1)
 if echo "$result" | grep -q "defun foo"; then
-    echo "PASS: delete returns modified code"
+    echo "PASS: delete-form returns modified code"
     PASS=$((PASS + 1))
 else
     echo "FAIL: delete returns unexpected output"
@@ -246,7 +246,7 @@ cat > /tmp/test-replace-scope.lisp << 'ENDOFFILE'
     (t
      (values stack nil))))
 ENDOFFILE
-result=$($BIN replace --file /tmp/test-replace-scope.lisp --line 5 --col 1 --replace '((or (string= tok "+")) (values stack (+ 1 2)))' 2>&1)
+result=$($BIN replace-form --file /tmp/test-replace-scope.lisp --line 5 --col 1 --replace '((or (string= tok "+")) (values stack (+ 1 2)))' 2>&1)
 # The replacement should only affect the clause on line 5, not the whole cond
 if echo "$result" | grep -q "defun foo" 2>/dev/null; then
     # This shouldn't happen - the defun foo test was from the earlier test file

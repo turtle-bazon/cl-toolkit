@@ -47,25 +47,25 @@
 ;;; Position helpers
 
 (defun offset-to-line-col (text offset)
-  "Convert a 0-indexed byte offset to (values line col) 1-indexed."
-  (let ((line 1) (col 1))
+  "Convert a 0-indexed byte offset to (values line col) 0-indexed."
+  (let ((line 0) (col 0))
     (loop for i from 0 below (min offset (length text))
           do (if (char= (char text i) #\Newline)
-                 (progn (incf line) (setf col 1))
+                 (progn (incf line) (setf col 0))
                  (incf col)))
     (values line col)))
 
 (defun offset-to-line-col-inverse (text line col)
-  "Convert LINE and COL (1-indexed) to a 0-indexed byte offset."
-  (let ((offset 0) (current-line 1) (current-col 1))
+  "Convert LINE and COL (0-indexed) to a 0-indexed byte offset."
+  (let ((offset 0) (current-line 0) (current-col 0))
     (loop while (< offset (length text))
           do (when (and (= current-line line)
                         (= current-col col))
                (return offset))
-             (if (char= (char text offset) #\Newline)
-                 (progn (incf current-line) (setf current-col 1))
-                 (incf current-col))
-             (incf offset))
+              (if (char= (char text offset) #\Newline)
+                  (progn (incf current-line) (setf current-col 0))
+                  (incf current-col))
+              (incf offset))
     offset))
 
 ;;; JSON serialization using cl-json

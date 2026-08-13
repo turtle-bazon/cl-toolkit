@@ -192,9 +192,9 @@ export default tool({
       } else {
         return JSON.stringify({ error: "Provide filePath for top-level command" })
       }
-    } else if (command === "delete") {
+    } else if (command === "delete-form") {
       if (!absolutePath) {
-        return JSON.stringify({ error: "delete command requires filePath" })
+        return JSON.stringify({ error: "delete-form command requires filePath" })
       }
       if (write) cmdArgs.push("--write")
       if (write) cmdArgs.push("--quiet")
@@ -206,26 +206,39 @@ export default tool({
       } else if (line !== undefined && col !== undefined) {
         cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col))
       } else {
-        return JSON.stringify({ error: "delete command requires line/col or index" })
+        return JSON.stringify({ error: "delete-form command requires line/col or index" })
       }
-    } else if (command === "insert") {
+    } else if (command === "insert-form") {
       if (!absolutePath) {
-        return JSON.stringify({ error: "insert command requires filePath" })
+        return JSON.stringify({ error: "insert-form command requires filePath" })
       }
       if (write) cmdArgs.push("--write")
       if (write) cmdArgs.push("--quiet")
       if (recovery) cmdArgs.push("--recovery")
-      if (validate) cmdArgs.push("--validate")
       if (noValidateInput) cmdArgs.push("--no-validate-input")
       if (noValidateResult) cmdArgs.push("--no-validate-result")
       if (line !== undefined && col !== undefined && code) {
         cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--insert", code)
       } else {
-        return JSON.stringify({ error: "insert command requires line, col, and code" })
+        return JSON.stringify({ error: "insert-form command requires line, col, and code" })
       }
-    } else if (command === "replace") {
+    } else if (command === "append-form") {
+      if (!absolutePath) {
+        return JSON.stringify({ error: "append-form command requires filePath" })
+      }
+      if (write) cmdArgs.push("--write")
+      if (write) cmdArgs.push("--quiet")
+      if (recovery) cmdArgs.push("--recovery")
+      if (noValidateInput) cmdArgs.push("--no-validate-input")
+      if (noValidateResult) cmdArgs.push("--no-validate-result")
+      if (line !== undefined && col !== undefined && code) {
+        cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--insert", code)
+      } else {
+        return JSON.stringify({ error: "append-form command requires line, col, and code" })
+      }
+    } else if (command === "replace-form") {
       if (!absolutePath || line === undefined || col === undefined || !code) {
-        return JSON.stringify({ error: "replace command requires filePath, line, col, and code" })
+        return JSON.stringify({ error: "replace-form command requires filePath, line, col, and code" })
       }
       if (write) cmdArgs.push("--write")
       if (write) cmdArgs.push("--quiet")
@@ -233,6 +246,17 @@ export default tool({
       if (noValidateInput) cmdArgs.push("--no-validate-input")
       if (noValidateResult) cmdArgs.push("--no-validate-result")
       cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--replace", code)
+    } else if (command === "insert") {
+      if (!absolutePath) {
+        return JSON.stringify({ error: "insert command requires filePath" })
+      }
+      if (write) cmdArgs.push("--write")
+      if (write) cmdArgs.push("--quiet")
+      if (line !== undefined && col !== undefined && code) {
+        cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--insert", code)
+      } else {
+        return JSON.stringify({ error: "insert command requires line, col, and code" })
+      }
     } else if (command === "move") {
       if (!absolutePath || line1 === undefined || col1 === undefined || line2 === undefined || col2 === undefined) {
         return JSON.stringify({ error: "move command requires filePath, line1, col1, line2, col2" })
@@ -268,7 +292,7 @@ export default tool({
       const output = runClToolkit(cmdArgs, code)
 
       // When --write is used with modification commands, CLI returns unified diff directly
-      if (write && ["delete", "insert", "replace", "move", "format"].includes(command)) {
+      if (write && ["delete-form", "insert-form", "append-form", "replace-form", "insert", "move", "format"].includes(command)) {
         if (output.startsWith("---") && absolutePath) {
           // Count additions and deletions from diff
           const additions = (output.match(/^\+/gm) || []).length
