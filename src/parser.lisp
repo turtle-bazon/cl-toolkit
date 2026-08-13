@@ -227,32 +227,40 @@
       (error "Index ~a out of range (0-~a)" index (1- (length forms))))
     (delete-node-from-text text (nth index forms))))
 
-(defun insert-form-at (text line col new-code &key after recovery)
+(defun insert-form-at (text line col new-code &key recovery)
   "Insert NEW-CODE at LINE, COL (1-indexed) in TEXT.
    Inserts before the form at the given position.
+   If position is past end of line/file, pads with spaces.
    When RECOVERY is T, use error recovery parser.
    Returns the modified source string."
-  (declare (ignore after))
   (let* ((ast (parse-for-edit text recovery))
          (node (find-form-at ast text line col)))
-    (unless node
-      (error "No form found at line ~a, col ~a" line col))
-    (let ((node-line (node-line node))
-          (node-col (node-col node)))
-      (when (and node-line node-col)
-        (format *error-output* "Inserting before form at line ~a, col ~a: ~a~%"
-                node-line node-col
-                (or (node-name node) (node-type node)))))
-    (let ((insert-at (node-start node)))
-      ;; Normalize new-code: ensure trailing newline
-      (let ((code (if (and (> (length new-code) 0)
-                           (char= (char new-code (1- (length new-code))) #\Newline))
-                      new-code
-                      (concatenate 'string new-code (string #\Newline)))))
-        (concatenate 'string
-                     (subseq text 0 insert-at)
-                     code
-                     (subseq text insert-at))))))
+    (if node
+        (let ((node-line (node-line node))
+              (node-col (node-col node)))
+          (when (and node-line node-col)
+            (format *error-output* "Inserting before form at line ~a, col ~a: ~a~%"
+                    node-line node-col
+                    (or (node-name node) (node-type node))))
+          (let ((insert-at (node-start node)))
+            (let ((code (if (and (> (length new-code) 0)
+                                 (char= (char new-code (1- (length new-code))) #\Newline))
+                            new-code
+                            (concatenate 'string new-code (string #\Newline)))))
+              (concatenate 'string
+                           (subseq text 0 insert-at)
+                           code
+                           (subseq text insert-at)))))
+        ;; Position past end — pad with spaces
+        (let* ((text-length (length text))
+               (pad-len (max 0 (- col text-length)))  ; pad to reach target column
+               (padding (make-string pad-len :initial-element #\Space))
+               (code (if (and (> (length new-code) 0)
+                              (char= (char new-code (1- (length new-code))) #\Newline))
+                         new-code
+                         (concatenate 'string new-code (string #\Newline)))))
+          (format *error-output* "Position past end, padding with spaces~%")
+          (concatenate 'string (subseq text 0 text-length) padding code)))))
 
 (defun insert-form-end (text new-code &key validate)
   "Insert NEW-CODE at the end of TEXT.
@@ -782,7 +790,7 @@
              (col (getf edit :col))
              (code (getf edit :code))
              (after (getf edit :after)))
-         (insert-form-at text line col code :after after)))
+         (insert-form-at text line col code)))
       (:insert-end
        (let ((code (getf edit :code)))
          (insert-form-end text code)))

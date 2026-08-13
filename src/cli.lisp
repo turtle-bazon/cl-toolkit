@@ -481,7 +481,6 @@
   (let* ((line (clingon:getopt cmd :line))
          (col (clingon:getopt cmd :col))
          (insert-code (clingon:getopt cmd :insert-code))
-         (at-end (clingon:getopt cmd :at-end))
          (write (clingon:getopt cmd :write))
          (quiet (clingon:getopt cmd :quiet))
          (recovery (clingon:getopt cmd :recovery))
@@ -499,15 +498,12 @@
           (clingon:exit 1))))
     (handler-case
         (let ((result
-                (cond
-                  (at-end
-                   (insert-form-end text insert-code))
-                   ((and line col insert-code)
+                (if (and line col insert-code)
                     (insert-form-at text line col insert-code
-                                    :recovery recovery))
-                  (t
-                   (format *error-output* "Error: --line/--col/--insert or --at-end required~%")
-                   (clingon:exit 1)))))
+                                    :recovery recovery)
+                    (progn
+                      (format *error-output* "Error: --line/--col/--insert required~%")
+                      (clingon:exit 1)))))
           ;; Validate result (unless --no-validate-result)
           (when (not no-validate-result)
             (let ((result-ast (if recovery
@@ -534,7 +530,7 @@
 (defun insert/command ()
   (clingon:make-command
    :name "insert"
-   :usage "(-f FILE | --code CODE) --insert CODE (--line L --col C | --at-end)"
+   :usage "(-f FILE | --code CODE) --insert CODE --line L --col C"
     :description "Insert code before a form, or at end of file"
    :long-description "Insert code at the given position. Validates both input ~
                       and result by default. Use --no-validate-input or ~
@@ -548,10 +544,8 @@
                                    :description "Line number" :key :line)
               (clingon:make-option :integer :long-name "col" :short-name #\c
                                    :description "Column number" :key :col)
-              (clingon:make-option :string :long-name "insert" :short-name #\i
-                                   :description "Code to insert" :key :insert-code)
-               (clingon:make-option :flag :long-name "at-end"
-                                    :description "Insert at end of file" :key :at-end)
+               (clingon:make-option :string :long-name "insert" :short-name #\i
+                                    :description "Code to insert" :key :insert-code)
                (make-write-option)
               (make-quiet-option)
               (make-recovery-option)
