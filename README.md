@@ -9,9 +9,11 @@ Lisp code toolkit for structural analysis and editing.
 - **Find**: Find form at specific line/column
 - **Extract**: Extract forms in a range
 - **Top-level**: List top-level forms
-- **Delete**: Delete form by position or index
-- **Insert**: Insert code before a form (or after if past end)
-- **Replace**: Replace form at position
+- **Delete-form**: Delete form by position or index
+- **Insert-form**: Insert code before a form
+- **Append-form**: Insert code after a form
+- **Insert**: Insert text at exact cursor position
+- **Replace-form**: Replace form at position
 - **Move**: Move form from one position to another
 - **Balance**: Analyze parenthesis/bracket balance
 - **Format**: Reformat source with consistent indentation
@@ -66,17 +68,21 @@ cl-toolkit top-level --file myfile.lisp
 echo "(defun foo () (bar))" | cl-toolkit top-level
 
 # Delete form
-cl-toolkit delete --file myfile.lisp --line 5 --col 2
-cl-toolkit delete --file myfile.lisp --index 0
-echo "(defun foo ()) (defun bar ())" | cl-toolkit delete --index 0
+cl-toolkit delete-form --file myfile.lisp --line 5 --col 2
+cl-toolkit delete-form --file myfile.lisp --index 0
+echo "(defun foo ()) (defun bar ())" | cl-toolkit delete-form --index 0
 
-# Insert code
-cl-toolkit insert --file myfile.lisp --line 5 --col 2 --insert "(new-form)"
-echo "(defun foo ())" | cl-toolkit insert --insert "(defun bar ())" --line 1 --col 99
+# Insert code before a form
+cl-toolkit insert-form --file myfile.lisp --line 5 --col 2 --insert "(new-form)"
+
+# Insert code after a form
+cl-toolkit append-form --file myfile.lisp --line 5 --col 2 --insert "(new-form)"
+
+# Insert text at exact position
+cl-toolkit insert --file myfile.lisp --line 5 --col 10 --insert " ; comment"
 
 # Replace form
-cl-toolkit replace --file myfile.lisp --line 5 --col 2 --replace "(replaced-form)"
-echo "(defun foo ())" | cl-toolkit replace --line 1 --col 1 --replace "(defun bar ())"
+cl-toolkit replace-form --file myfile.lisp --line 5 --col 2 --replace "(replaced-form)"
 
 # Move form
 cl-toolkit move --file myfile.lisp --from-line 5 --from-col 2 --to-line 10 --to-col 2
@@ -90,12 +96,114 @@ cl-toolkit format --file myfile.lisp
 echo "(defun  foo(x)  (+ x 1))" | cl-toolkit format
 ```
 
+## Commands
+
+### Form-Level Commands
+
+These commands work with Lisp forms (s-expressions):
+
+| Command | Description |
+|---------|-------------|
+| `insert-form` | Insert code **before** a form at position |
+| `append-form` | Insert code **after** a form at position |
+| `replace-form` | Replace form at position with new code |
+| `delete-form` | Delete form by position or index |
+
+```bash
+# insert-form: adds before the form
+cl-toolkit insert-form --file demo.lisp --line 0 --col 0 --insert "(defun bar () 2)
+"
+# Result:
+# (defun bar () 2)
+# (defun foo (x) (+ x 1))
+
+# append-form: adds after the form
+cl-toolkit append-form --file demo.lisp --line 0 --col 0 --insert "
+(defun baz () 3)"
+# Result:
+# (defun foo (x) (+ x 1))
+# (defun baz () 3)
+```
+
+### Text-Level Command
+
+| Command | Description |
+|---------|-------------|
+| `insert` | Insert text at exact cursor position |
+
+```bash
+# insert: adds text at exact position (no form detection)
+cl-toolkit insert --file demo.lisp --line 0 --col 12 --insert " ; comment"
+# Result:
+# (defun foo (x) ; comment) (+ x 1))
+```
+
+### Other Commands
+
+| Command | Description |
+|---------|-------------|
+| `parse` | Parse Lisp code to JSON AST |
+| `validate` | Check syntax and report errors |
+| `find` | Find form at position |
+| `extract` | Extract forms in a range |
+| `top-level` | List top-level forms |
+| `move` | Move form from one position to another |
+| `balance` | Analyze parenthesis balance |
+| `format` | Reformat source with consistent indentation |
+
 ## Output Behavior
 
 - **Read-only commands** (parse, validate, balance, etc.) output JSON to stdout
-- **Modification commands** (delete, insert, replace, format, move) output plain text to stdout when not using `--write`
+- **Modification commands** (delete-form, insert-form, append-form, replace-form, format, move) output plain text to stdout when not using `--write`
 - **With `--write`**, results are written to the file (creates `.bak` backup) and a unified diff is printed to stdout
 - **No changes** — if the operation produces no actual changes, "No changes made." is printed instead
+
+## Validation
+
+All modification commands validate both input and result by default:
+- **Input validation**: Checks that the new code is valid Lisp before performing the operation
+- **Result validation**: Checks that the modified source is valid after the operation
+
+Use `--no-validate-input` and/or `--no-validate-result` to skip specific validations:
+
+```bash
+# Skip input validation only
+cl-toolkit replace-form --file myfile.lisp --line 5 --col 2 \
+  --replace "(unclosed" --no-validate-input
+
+# Skip result validation only
+cl-toolkit replace-form --file myfile.lisp --line 5 --col 2 \
+  --replace "(unclosed" --no-validate-result
+
+# Skip all validation (use with caution)
+cl-toolkit replace-form --file myfile.lisp --line 5 --col 2 \
+  --replace "(unclosed" --no-validate-input --no-validate-result
+```
+
+## Insert Behavior
+
+### `insert-form` and `append-form`
+
+Client controls newlines by including them in the insert code:
+
+```bash
+# Add newline before
+cl-toolkit insert-form --file demo.lisp --line 0 --col 0 --insert "(defun bar () 2)
+"
+
+# Add newline after
+cl-toolkit append-form --file demo.lisp --line 0 --col 0 --insert "
+(defun baz () 3)"
+```
+
+### `insert`
+
+Simple text insertion at exact position:
+
+```bash
+# Insert at column 12
+cl-toolkit insert --file demo.lisp --line 0 --col 12 --insert " ; comment"
+```
 
 ## Global Setup
 
@@ -148,7 +256,7 @@ node ~/cl-toolkit/setup.js .opencode
 ### Agent Usage
 
 Tell the agent:
-> Use cl-toolkit to parse/validate/edit Lisp code. Commands: parse, validate, find, extract, top-level, delete, insert, replace, move, balance, format.
+> Use cl-toolkit to parse/validate/edit Lisp code. Commands: parse, validate, find, extract, top-level, delete-form, insert-form, append-form, insert, replace-form, move, balance, format.
 
 Example prompts:
 - "Parse this file and show me the top-level forms"
@@ -156,121 +264,10 @@ Example prompts:
 - "Validate this file for syntax errors"
 - "Delete the form at line 10"
 - "Insert `(new-form)` before the form at line 5"
+- "Append `(new-form)` after the form at line 5"
 - "Move the form from line 3 to after line 8"
 - "Check parenthesis balance in this file"
 - "Format this file with consistent indentation"
-
-### Available Commands
-
-| Command | Description | Input Sources |
-|---------|-------------|---------------|
-| `parse` | Parse Lisp code to JSON AST | `--code`, `--file`, or stdin |
-| `validate` | Check syntax and report errors | `--code`, `--file`, or stdin |
-| `find` | Find form at position | `--code`, `--file`, or stdin + `--line --col` |
-| `extract` | Extract forms in a range | `--code`, `--file`, or stdin + `--line1 --col1 --line2 --col2` |
-| `top-level` | List top-level forms | `--code`, `--file`, or stdin |
-| `delete` | Delete form by position or index | `--code`, `--file`, or stdin + `--line --col` or `--index` |
-| `insert` | Insert code before/after form (appends if past end) | `--code`, `--file`, or stdin + `--line --col --insert` |
-| `replace` | Replace form at position | `--code`, `--file`, or stdin + `--line --col --replace` |
-| `move` | Move form from one position to another | `--code`, `--file`, or stdin + `--from-line --from-col --to-line --to-col` |
-| `balance` | Analyze parenthesis balance | `--code`, `--file`, or stdin |
-| `format` | Reformat source with consistent indentation | `--code`, `--file`, or stdin |
-
-Optional flags: `--recovery` (error recovery), `--write` (in-place edit), `--no-validate-input` (skip input validation), `--no-validate-result` (skip result validation), `--quiet` (suppress info output)
-
-### Validation
-
-All modification commands (insert, replace, delete) validate both input and result by default:
-- **Input validation**: Checks that the new code is valid Lisp before performing the operation
-- **Result validation**: Checks that the modified source is valid after the operation
-
-Use `--no-validate-input` and/or `--no-validate-result` to skip specific validations:
-
-```bash
-# Validation ON by default (safe mode)
-cl-toolkit replace --file myfile.lisp --line 5 --col 2 \
-  --replace "(new-form)"
-# Fails if input or result is invalid
-
-# Skip input validation only
-cl-toolkit replace --file myfile.lisp --line 5 --col 2 \
-  --replace "(unclosed" --no-validate-input
-# Fails only if result is invalid
-
-# Skip result validation only
-cl-toolkit replace --file myfile.lisp --line 5 --col 2 \
-  --replace "(unclosed" --no-validate-result
-# Fails only if input is invalid
-
-# Skip all validation (use with caution)
-cl-toolkit replace --file myfile.lisp --line 5 --col 2 \
-  --replace "(unclosed" --no-validate-input --no-validate-result
-```
-
-## Insert Behavior
-
-The `insert` command has special handling for different positions:
-
-### Same Line as Form
-
-- **Before form** (col < form's start column): Inserts before the form
-- **Inside form** (col is within the form): Inserts before the form
-- **At end of form** (col = form's end column): Appends after the form
-- **Past end of form** (col > form's end column): Appends after the form
-
-### Different Line
-
-- **New line** (line > form's line): Adds a newline, then the code
-
-### Examples
-
-Given `(defun a () 1)` (14 characters):
-
-| Position | Result | Behavior |
-|----------|--------|----------|
-| (1,1) | `(defun b () 2)\n(defun a () 1)` | Before first form |
-| (1,7) | `(defun b () 2)\n(defun a () 1)` | Inside form (before) |
-| (1,14) | `(defun a () 1)(defun b () 2)` | At end of form |
-| (1,15) | `(defun a () 1)(defun b () 2)` | One past end |
-| (1,16) | `(defun a () 1)(defun b () 2)` | Two past end |
-| (2,1) | `(defun a () 1)\n(defun b () 2)` | New line |
-
-## Editing Workflow
-
-`insert` and `replace` have different semantics:
-
-- **`insert`** adds new code before the form at the given position, or after if past the form's end.
-- **`replace`** replaces the form containing the given line/col, including nested subforms.
-
-### Modifying Existing Code
-
-To add new functionality to an existing file:
-
-1. **Add helper functions** as new top-level forms:
-   ```bash
-   cl-toolkit insert --file evaluator.lisp --line 11 --col 3 \
-     --insert "(defun new-helper (x) ...)" --write
-   ```
-
-2. **Replace existing forms** with modified versions:
-   ```bash
-   cl-toolkit replace --file evaluator.lisp --line 20 --col 3 \
-     --replace "(defun dispatch-token (tok) ...)" --write
-   ```
-
-3. **Replace nested subforms** — point to any line/col inside the target:
-   ```bash
-   cl-toolkit replace --file evaluator.lisp --line 25 --col 5 \
-     --replace "(* 5 6)" --write
-   ```
-
-4. **Pipe-based workflow** — read from stdin, write to stdout:
-   ```bash
-   cat evaluator.lisp | cl-toolkit format > formatted.lisp
-   cat evaluator.lisp | cl-toolkit delete --index 2 > cleaned.lisp
-   ```
-
-Both `--write` commands create a `.bak` backup file.
 
 ## OpenCode Integration
 
@@ -278,12 +275,12 @@ When using cl-toolkit with opencode, use the **cl-toolkit plugin** (not bash) fo
 
 **Correct** (returns diff):
 ```typescript
-cl-toolkit({ command: "replace", filePath: "file.lisp", line: 5, col: 2, code: "(new-form)", write: true })
+cl-toolkit({ command: "replace-form", filePath: "file.lisp", line: 5, col: 2, code: "(new-form)", write: true })
 ```
 
 **Wrong** (returns raw JSON):
 ```bash
-cl-toolkit replace -f file.lisp --line 5 --col 2 --replace "(new-form)" --write
+cl-toolkit replace-form -f file.lisp --line 5 --col 2 --replace "(new-form)" --write
 ```
 
 ## Requirements
