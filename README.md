@@ -75,7 +75,7 @@ echo "(defun foo ()) (defun bar ())" | cl-toolkit delete --index 0
 
 # Insert code
 cl-toolkit insert --file myfile.lisp --line 5 --col 2 --insert "(new-form)"
-echo "(defun foo ())" | cl-toolkit insert --insert "(defun bar ())" --at-end
+echo "(defun foo ())" | cl-toolkit insert --insert "(defun bar ())" --line 1 --col 99
 
 # Replace form
 cl-toolkit replace --file myfile.lisp --line 5 --col 2 --replace "(replaced-form)"
@@ -173,7 +173,7 @@ Example prompts:
 | `extract` | Extract forms in a range | `--code`, `--file`, or stdin + `--line1 --col1 --line2 --col2` |
 | `top-level` | List top-level forms | `--code`, `--file`, or stdin |
 | `delete` | Delete form by position or index | `--code`, `--file`, or stdin + `--line --col` or `--index` |
-| `insert` | Insert code before a form | `--code`, `--file`, or stdin + `--line --col --insert` or `--at-end` |
+| `insert` | Insert code before a form (pads with spaces if past EOF) | `--code`, `--file`, or stdin + `--line --col --insert` |
 | `replace` | Replace form at position | `--code`, `--file`, or stdin + `--line --col --replace` |
 | `move` | Move form from one position to another | `--code`, `--file`, or stdin + `--from-line --from-col --to-line --to-col` |
 | `balance` | Analyze parenthesis balance | `--code`, `--file`, or stdin |
