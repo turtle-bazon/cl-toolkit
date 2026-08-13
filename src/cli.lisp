@@ -482,7 +482,6 @@
          (col (clingon:getopt cmd :col))
          (insert-code (clingon:getopt cmd :insert-code))
          (at-end (clingon:getopt cmd :at-end))
-         (after (clingon:getopt cmd :after))
          (write (clingon:getopt cmd :write))
          (quiet (clingon:getopt cmd :quiet))
          (recovery (clingon:getopt cmd :recovery))
@@ -503,9 +502,9 @@
                 (cond
                   (at-end
                    (insert-form-end text insert-code))
-                  ((and line col insert-code)
-                   (insert-form-at text line col insert-code
-                                   :after after :recovery recovery))
+                   ((and line col insert-code)
+                    (insert-form-at text line col insert-code
+                                    :recovery recovery))
                   (t
                    (format *error-output* "Error: --line/--col/--insert or --at-end required~%")
                    (clingon:exit 1)))))
@@ -536,7 +535,7 @@
   (clingon:make-command
    :name "insert"
    :usage "(-f FILE | --code CODE) --insert CODE (--line L --col C | --at-end)"
-   :description "Insert code before/after a form, or at end of file"
+    :description "Insert code before a form, or at end of file"
    :long-description "Insert code at the given position. Validates both input ~
                       and result by default. Use --no-validate-input or ~
                       --no-validate-result to skip specific validations."
@@ -551,11 +550,9 @@
                                    :description "Column number" :key :col)
               (clingon:make-option :string :long-name "insert" :short-name #\i
                                    :description "Code to insert" :key :insert-code)
-              (clingon:make-option :flag :long-name "at-end"
-                                   :description "Insert at end of file" :key :at-end)
-              (clingon:make-option :flag :long-name "after"
-                                   :description "Insert after the form (default: before)" :key :after)
-              (make-write-option)
+               (clingon:make-option :flag :long-name "at-end"
+                                    :description "Insert at end of file" :key :at-end)
+               (make-write-option)
               (make-quiet-option)
               (make-recovery-option)
               (clingon:make-option :flag :long-name "no-validate-input"

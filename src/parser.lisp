@@ -229,9 +229,10 @@
 
 (defun insert-form-at (text line col new-code &key after recovery)
   "Insert NEW-CODE at LINE, COL (1-indexed) in TEXT.
-   If AFTER is nil, insert before; if AFTER is t, insert after.
+   Inserts before the form at the given position.
    When RECOVERY is T, use error recovery parser.
    Returns the modified source string."
+  (declare (ignore after))
   (let* ((ast (parse-for-edit text recovery))
          (node (find-form-at ast text line col)))
     (unless node
@@ -239,11 +240,10 @@
     (let ((node-line (node-line node))
           (node-col (node-col node)))
       (when (and node-line node-col)
-        (format *error-output* "~a form at line ~a, col ~a: ~a~%"
-                (if after "Inserting after" "Inserting before")
+        (format *error-output* "Inserting before form at line ~a, col ~a: ~a~%"
                 node-line node-col
                 (or (node-name node) (node-type node)))))
-    (let ((insert-at (if after (node-end node) (node-start node))))
+    (let ((insert-at (node-start node)))
       ;; Normalize new-code: ensure trailing newline
       (let ((code (if (and (> (length new-code) 0)
                            (char= (char new-code (1- (length new-code))) #\Newline))

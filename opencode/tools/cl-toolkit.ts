@@ -75,15 +75,7 @@ function ensureBinary(): void {
   if (existsSync(CL_TOOLKIT_PATH)) {
     return
   }
-  console.log("cl-toolkit binary not found, building...")
-  execFileSync("make", ["build"], {
-    cwd: REPO_DIR,
-    timeout: 120000,
-    stdio: "inherit",
-  })
-  if (!existsSync(CL_TOOLKIT_PATH)) {
-    throw new Error(`Failed to build cl-toolkit binary at ${CL_TOOLKIT_PATH}`)
-  }
+  throw new Error(`cl-toolkit binary not found at ${CL_TOOLKIT_PATH}. Run: cd ${REPO_DIR} && make build`)
 }
 
 interface ParseResult {
@@ -111,18 +103,14 @@ interface TopLevelResult {
 
 function runClToolkit(args: string[], code?: string): string {
   ensureBinary()
-  try {
-    const input = code ? Buffer.from(code) : undefined
-    const result = execFileSync(CL_TOOLKIT_PATH, args, {
-      input,
-      timeout: 10000,
-      maxBuffer: 1024 * 1024,
-      encoding: "utf-8",
-    })
-    return result
-  } catch (e: any) {
-    throw new Error(`cl-toolkit failed: ${e.stderr || e.message}`)
-  }
+  const input = code ? Buffer.from(code) : undefined
+  const result = execFileSync(CL_TOOLKIT_PATH, args, {
+    input,
+    timeout: 10000,
+    maxBuffer: 1024 * 1024,
+    encoding: "utf-8",
+  })
+  return result
 }
 
 export default tool({
@@ -138,7 +126,6 @@ export default tool({
     validate: tool.schema.boolean().optional().describe("Validate new code syntax (insert --end command)"),
     noValidateInput: tool.schema.boolean().optional().describe("Skip input code validation"),
     noValidateResult: tool.schema.boolean().optional().describe("Skip result validation"),
-    after: tool.schema.boolean().optional().describe("Insert after the form instead of before (insert command)"),
     index: tool.schema.number().optional().describe("Top-level form index (delete --index command)"),
     line: tool.schema.number().optional().describe("Line number"),
     col: tool.schema.number().optional().describe("Column number"),
@@ -149,12 +136,13 @@ export default tool({
     indent: tool.schema.string().optional().describe("Indent string for format command (default: 2 spaces)"),
   },
   async execute(args, context) {
-    const { command, code, filePath, recovery, write, after, validate, noValidateInput, noValidateResult, index, line, col, line1, col1, line2, col2, indent } = args
+    const { command, code, filePath, recovery, write, validate, noValidateInput, noValidateResult, index, line, col, line1, col1, line2, col2, indent } = args
 
     // Resolve file path if provided
     let absolutePath: string | undefined
     if (filePath) {
-      absolutePath = path.resolve(context.worktree, filePath)
+      const workdir = context.worktree || process.cwd()
+      absolutePath = path.resolve(workdir, filePath)
     }
 
     // Read original file for diff generation (modification commands only)
@@ -230,7 +218,6 @@ export default tool({
       if (validate) cmdArgs.push("--validate")
       if (noValidateInput) cmdArgs.push("--no-validate-input")
       if (noValidateResult) cmdArgs.push("--no-validate-result")
-      if (after) cmdArgs.push("--after")
       if (line !== undefined && col !== undefined && code) {
         cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--insert", code)
       } else {
@@ -286,9 +273,11 @@ export default tool({
           // Count additions and deletions from diff
           const additions = (output.match(/^\+/gm) || []).length
           const deletions = (output.match(/^-/gm) || []).length
-          // Set metadata for TUI diff rendering
-          context.metadata({
-            title: `${command} ${absolutePath}`,
+          // Return object with metadata for TUI diff rendering
+          // (string return causes metadata to be dropped by the registry)
+          return {
+            title: `cl-toolkit ${command} ${path.basename(absolutePath)}`,
+            output: output,
             metadata: {
               diff: output,
               filediff: {
@@ -299,8 +288,7 @@ export default tool({
               },
               diagnostics: {},
             },
-          })
-          return output
+          }
         }
         // "No changes made."
         return output
@@ -349,8 +337,9 @@ export default tool({
           if (diff) {
             const additions = (diff.match(/^\+/gm) || []).length
             const deletions = (diff.match(/^-/gm) || []).length
-            context.metadata({
-              title: `${command} ${absolutePath}`,
+            return {
+              title: `cl-toolkit ${command} ${path.basename(absolutePath)}`,
+              output: diff,
               metadata: {
                 diff,
                 filediff: {
@@ -361,9 +350,9 @@ export default tool({
                 },
                 diagnostics: {},
               },
-            })
+            }
           }
-          return diff || JSON.stringify({
+          return JSON.stringify({
             success: true,
             source: result.source,
             _summary: `${command} command completed successfully`,
@@ -399,8 +388,9 @@ export default tool({
         if (diff) {
           const additions = (diff.match(/^\+/gm) || []).length
           const deletions = (diff.match(/^-/gm) || []).length
-          context.metadata({
-            title: `format ${absolutePath}`,
+          return {
+            title: `cl-toolkit format ${path.basename(absolutePath)}`,
+            output: diff,
             metadata: {
               diff,
               filediff: {
@@ -411,9 +401,9 @@ export default tool({
               },
               diagnostics: {},
             },
-          })
+          }
         }
-        return diff || JSON.stringify({
+        return JSON.stringify({
           source: result.source,
           _summary: "Code reformatted",
         })

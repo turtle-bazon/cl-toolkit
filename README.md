@@ -10,7 +10,7 @@ Lisp code toolkit for structural analysis and editing.
 - **Extract**: Extract forms in a range
 - **Top-level**: List top-level forms
 - **Delete**: Delete form by position or index
-- **Insert**: Insert code before/after a form
+- **Insert**: Insert code before a form
 - **Replace**: Replace form at position
 - **Move**: Move form from one position to another
 - **Balance**: Analyze parenthesis/bracket balance
@@ -158,7 +158,7 @@ Example prompts:
 - "Find the form at line 5, column 2"
 - "Validate this file for syntax errors"
 - "Delete the form at line 10"
-- "Insert `(new-form)` after the form at line 5"
+- "Insert `(new-form)` before the form at line 5"
 - "Move the form from line 3 to after line 8"
 - "Check parenthesis balance in this file"
 - "Format this file with consistent indentation"
@@ -173,7 +173,7 @@ Example prompts:
 | `extract` | Extract forms in a range | `--code`, `--file`, or stdin + `--line1 --col1 --line2 --col2` |
 | `top-level` | List top-level forms | `--code`, `--file`, or stdin |
 | `delete` | Delete form by position or index | `--code`, `--file`, or stdin + `--line --col` or `--index` |
-| `insert` | Insert code before/after a form | `--code`, `--file`, or stdin + `--line --col --insert` or `--at-end` |
+| `insert` | Insert code before a form | `--code`, `--file`, or stdin + `--line --col --insert` or `--at-end` |
 | `replace` | Replace form at position | `--code`, `--file`, or stdin + `--line --col --replace` |
 | `move` | Move form from one position to another | `--code`, `--file`, or stdin + `--from-line --from-col --to-line --to-col` |
 | `balance` | Analyze parenthesis balance | `--code`, `--file`, or stdin |
@@ -214,7 +214,7 @@ cl-toolkit replace --file myfile.lisp --line 5 --col 2 \
 
 `insert` and `replace` have different semantics:
 
-- **`insert`** adds new code before/after the form at the given position.
+- **`insert`** adds new code before the form at the given position.
 - **`replace`** replaces the form containing the given line/col, including nested subforms.
 
 ### Modifying Existing Code
