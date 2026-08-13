@@ -147,7 +147,7 @@ cl-toolkit insert --file demo.lisp --line 0 --col 12 --insert " ; comment"
 | `find` | Find form at position |
 | `extract` | Extract forms in a range |
 | `top-level` | List top-level forms |
-| `move` | Move form from one position to another |
+| `move-form` | Move form from one position to another |
 | `balance` | Analyze parenthesis balance |
 | `format` | Reformat source with consistent indentation |
 

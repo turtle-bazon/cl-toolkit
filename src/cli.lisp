@@ -811,9 +811,9 @@
       (error (c)
         (output-edit-result nil (format nil "~a" c))))))
 
-(defun move/command ()
+(defun move-form/command ()
   (clingon:make-command
-   :name "move"
+   :name "move-form"
    :usage "(-f FILE | --code CODE) --from-line L1 --from-col C1 --to-line L2 --to-col C2"
    :description "Move form from (L1,C1) to after (L2,C2)"
    :options (list
@@ -888,7 +888,7 @@
                    (append-form/command)
                    (replace-form/command)
                    (insert-at/command)
-                   (move/command)
+                   (move-form/command)
                    (help/command)
                    (version/command))))
 

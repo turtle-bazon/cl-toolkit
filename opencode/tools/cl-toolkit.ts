@@ -101,23 +101,32 @@ interface TopLevelResult {
   count: number
 }
 
-function runClToolkit(args: string[], code?: string): string {
+function runClToolkit(args: string[], code?: string): { stdout: string; stderr: string; exitCode: number } {
   ensureBinary()
   const input = code ? Buffer.from(code) : undefined
-  const result = execFileSync(CL_TOOLKIT_PATH, args, {
-    input,
-    timeout: 10000,
-    maxBuffer: 1024 * 1024,
-    encoding: "utf-8",
-  })
-  return result
+  try {
+    const result = execFileSync(CL_TOOLKIT_PATH, args, {
+      input,
+      timeout: 10000,
+      maxBuffer: 1024 * 1024,
+      encoding: "utf-8",
+    })
+    return { stdout: result, stderr: "", exitCode: 0 }
+  } catch (error: any) {
+    // execFileSync throws on non-zero exit code
+    return {
+      stdout: error.stdout || "",
+      stderr: error.stderr || error.message || "",
+      exitCode: error.status || 1,
+    }
+  }
 }
 
 export default tool({
   description: "Parse, validate, and edit Common Lisp code using cl-toolkit (PEG parser with error recovery)",
   args: {
     command: tool.schema
-      .enum(["parse", "validate", "find", "extract", "top-level", "delete", "insert", "replace", "move", "balance", "format"])
+      .enum(["parse", "validate", "find", "extract", "top-level", "delete-form", "insert-form", "append-form", "replace-form", "move-form", "insert", "balance", "format"])
       .describe("Command to execute"),
     code: tool.schema.string().optional().describe("Inline Lisp code to parse/insert/replace"),
     filePath: tool.schema.string().optional().describe("Path to .lisp file"),
@@ -257,9 +266,9 @@ export default tool({
       } else {
         return JSON.stringify({ error: "insert command requires line, col, and code" })
       }
-    } else if (command === "move") {
+    } else if (command === "move-form") {
       if (!absolutePath || line1 === undefined || col1 === undefined || line2 === undefined || col2 === undefined) {
-        return JSON.stringify({ error: "move command requires filePath, line1, col1, line2, col2" })
+        return JSON.stringify({ error: "move-form command requires filePath, line1, col1, line2, col2" })
       }
       if (write) cmdArgs.push("--write")
       if (write) cmdArgs.push("--quiet")
@@ -289,24 +298,33 @@ export default tool({
     }
 
     try {
-      const output = runClToolkit(cmdArgs, code)
+      const { stdout, stderr, exitCode } = runClToolkit(cmdArgs, code)
+
+      // If cl-toolkit failed, return the error
+      if (exitCode !== 0) {
+        return {
+          title: `cl-toolkit ${command} (failed)`,
+          output: stderr || stdout || "Unknown error",
+          metadata: { diagnostics: {} },
+        }
+      }
 
       // When --write is used with modification commands, CLI returns unified diff directly
-      if (write && ["delete-form", "insert-form", "append-form", "replace-form", "insert", "move", "format"].includes(command)) {
-        if (output.startsWith("---") && absolutePath) {
+      if (write && ["delete-form", "insert-form", "append-form", "replace-form", "move-form", "insert", "format"].includes(command)) {
+        if (stdout.startsWith("---") && absolutePath) {
           // Count additions and deletions from diff
-          const additions = (output.match(/^\+/gm) || []).length
-          const deletions = (output.match(/^-/gm) || []).length
+          const additions = (stdout.match(/^\+/gm) || []).length
+          const deletions = (stdout.match(/^-/gm) || []).length
           // Return object with metadata for TUI diff rendering
           // (string return causes metadata to be dropped by the registry)
           return {
             title: `cl-toolkit ${command} ${path.basename(absolutePath)}`,
-            output: output,
+            output: stdout,
             metadata: {
-              diff: output,
+              diff: stdout,
               filediff: {
                 file: absolutePath,
-                patch: output,
+                patch: stdout,
                 additions,
                 deletions,
               },
@@ -315,10 +333,10 @@ export default tool({
           }
         }
         // "No changes made."
-        return output
+        return stdout
       }
 
-      const result = JSON.parse(output)
+      const result = JSON.parse(stdout)
 
       // Add metadata for better display
       if (command === "parse" && result.type === "LIST") {
