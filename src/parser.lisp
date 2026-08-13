@@ -252,15 +252,19 @@
                            code
                            (subseq text insert-at)))))
         ;; Position past end — pad with spaces
-        (let* ((text-length (length text))
-               (pad-len (max 0 (- col text-length)))  ; pad to reach target column
+        (let* ((line-start (loop for i from (1- (length text)) downto 0
+                                 when (char= (char text i) #\Newline)
+                                   return (1+ i)
+                                 finally (return 0)))
+               (current-col (- (length text) line-start))
+               (pad-len (max 0 (- col current-col 1)))
                (padding (make-string pad-len :initial-element #\Space))
                (code (if (and (> (length new-code) 0)
                               (char= (char new-code (1- (length new-code))) #\Newline))
                          new-code
                          (concatenate 'string new-code (string #\Newline)))))
           (format *error-output* "Position past end, padding with spaces~%")
-          (concatenate 'string (subseq text 0 text-length) padding code)))))
+          (concatenate 'string (subseq text 0 (length text)) padding code)))))
 
 (defun insert-form-end (text new-code &key validate)
   "Insert NEW-CODE at the end of TEXT.
