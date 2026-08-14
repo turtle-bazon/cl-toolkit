@@ -364,9 +364,9 @@
          (del-end (skip-whitespace-and-newlines text from-end))
          (insert-at (if (< from-end to-start)
                         ;; Source is before destination: insert after destination
-                        (- to-end (- del-end from-start))
-                        ;; Source is after destination: insert after destination
-                        to-end)))
+                        to-end
+                        ;; Source is after destination: insert before destination
+                        to-start)))
     (values form-text del-end insert-at)))
 
 (defun move-form (text from-line from-col to-line to-col &key recovery)
@@ -375,21 +375,43 @@
    Returns the modified source string."
   (multiple-value-bind (from-node to-node)
       (move-find-nodes text from-line from-col to-line to-col recovery)
+    ;; No-op if same node
+    (when (eq from-node to-node)
+      (return-from move-form text))
     (move-log-positions from-node to-node)
-    (multiple-value-bind (form-text del-end insert-at)
-        (move-compute-regions text from-node to-node)
-      (let ((insert-code (if (and (> (length form-text) 0)
-                                 (char= (char form-text (1- (length form-text))) #\Newline))
-                             form-text
-                             (concatenate 'string form-text (string #\Newline)))))
+    (let* ((from-start (node-start from-node))
+           (from-end (node-end from-node))
+           (to-start (node-start to-node))
+           (to-end (node-end to-node))
+           (form-text (subseq text from-start from-end))
+           ;; Skip whitespace after source form
+           (del-end (skip-whitespace-and-newlines text from-end)))
+      ;; Compute insertion point
+      (let ((insert-at (if (< from-end to-start)
+                           ;; Source before destination: insert after destination
+                           to-end
+                           ;; Source after destination: insert before destination
+                           to-start)))
+        ;; Delete source form and its trailing whitespace
         (let ((after-delete (concatenate 'string
-                                         (subseq text 0 (node-start from-node))
+                                         (subseq text 0 from-start)
                                          (subseq text del-end))))
-          (setf insert-at (max 0 (min insert-at (length after-delete))))
-          (concatenate 'string
-                       (subseq after-delete 0 insert-at)
-                       insert-code
-                       (subseq after-delete insert-at)))))))
+          ;; Ensure newline before insert point
+          (when (and (> insert-at 0)
+                     (< insert-at (length after-delete))
+                     (char/= (char after-delete (1- insert-at)) #\Newline)
+                     (char/= (char after-delete insert-at) #\Newline))
+            (setf insert-at (1+ insert-at)))
+          ;; Ensure newline after form
+          (let ((insert-code (if (and (> (length form-text) 0)
+                                     (char= (char form-text (1- (length form-text))) #\Newline))
+                                form-text
+                                (concatenate 'string form-text (string #\Newline)))))
+            (setf insert-at (min insert-at (length after-delete)))
+            (concatenate 'string
+                         (subseq after-delete 0 insert-at)
+                         insert-code
+                         (subseq after-delete insert-at))))))))
 
 ;;; ============================================================
 ;;; Balance Analysis
