@@ -330,6 +330,19 @@
       (error "No form found at line ~a, col ~a" from-line from-col))
     (unless to-node
       (error "No form found at line ~a, col ~a" to-line to-col))
+    ;; If we found a symbol, get its parent list
+    (labels ((find-parent (n target)
+               (when (and (node-children n) (not (eq n target)))
+                 (dolist (child (node-children n))
+                   (when (eq child target) (return n))
+                   (let ((result (find-parent child target)))
+                     (when result (return result)))))))
+      (when (not (node-list-p from-node))
+        (let ((parent (find-parent ast from-node)))
+          (when parent (setf from-node parent))))
+      (when (not (node-list-p to-node))
+        (let ((parent (find-parent ast to-node)))
+          (when parent (setf to-node parent)))))
     (values from-node to-node)))
 
 (defun move-log-positions (from-node to-node)
@@ -349,10 +362,11 @@
          (to-end (node-end to-node))
          (form-text (subseq text from-start from-end))
          (del-end (skip-whitespace-and-newlines text from-end))
-         (delete-len (- del-end from-start))
          (insert-at (if (< from-end to-start)
-                        (- to-end delete-len)
-                        to-start)))
+                        ;; Source is before destination: insert after destination
+                        (- to-end (- del-end from-start))
+                        ;; Source is after destination: insert after destination
+                        to-end)))
     (values form-text del-end insert-at)))
 
 (defun move-form (text from-line from-col to-line to-col &key recovery)
