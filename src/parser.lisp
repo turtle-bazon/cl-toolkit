@@ -210,11 +210,6 @@
          (node (find-form-at ast text line col)))
     (unless node
       (error "No form found at line ~a, col ~a" line col))
-    (let ((node-line (node-line node))
-          (node-col (node-col node)))
-      (when (and node-line node-col)
-        (format *error-output* "Deleting form at line ~a, col ~a (depth ~a)~%"
-                node-line node-col (node-type node))))
     (delete-node-from-text text node)))
 
 (defun delete-top-level-at (text index &key recovery)
@@ -232,11 +227,10 @@
    If we're inside a symbol, finds the containing list.
    When RECOVERY is T, use error recovery parser.
    Returns the modified source string."
-  (let* ((ast (parse-for-edit text recovery))
-         (node (find-form-at ast text line col)))
+   (let* ((ast (parse-for-edit text recovery))
+          (node (find-form-at ast text line col)))
     (if node
         (let ((insert-before (node-start node)))
-          (format *error-output* "Inserting before form at offset ~a~%" insert-before)
           ;; If we're at a symbol, check if there's a containing list at the same line
           ;; that starts at an earlier column (the opening paren)
           (when (not (node-list-p node))
@@ -260,28 +254,23 @@
                        new-code
                        (subseq text insert-before)))
         ;; No form found — insert at end
-        (progn
-          (format *error-output* "No form found, inserting at end~%")
-          (concatenate 'string text new-code)))))
+        (concatenate 'string text new-code))))
 
 (defun append-form-at (text line col new-code &key recovery)
   "Append NEW-CODE after the form at LINE, COL (0-indexed) in TEXT.
    When RECOVERY is T, use error recovery parser.
    Returns the modified source string."
-  (let* ((ast (parse-for-edit text recovery))
-         (node (find-form-at ast text line col)))
+   (let* ((ast (parse-for-edit text recovery))
+          (node (find-form-at ast text line col)))
     (if node
         (let* ((node-end (node-end node)))
-          (format *error-output* "Appending after form at offset ~a~%" node-end)
           ;; Insert after the form
           (concatenate 'string
                        (subseq text 0 node-end)
                        new-code
                        (subseq text node-end)))
         ;; No form found — append to end
-        (progn
-          (format *error-output* "No form found, appending to end~%")
-          (concatenate 'string text new-code)))))
+        (concatenate 'string text new-code))))
 
 (defun insert-form-end (text new-code &key validate)
   "Insert NEW-CODE at the end of TEXT.
@@ -304,16 +293,10 @@
   "Replace the form at LINE, COL (0-indexed) with NEW-CODE in TEXT.
    When RECOVERY is T, use error recovery parser.
    Returns the modified source string."
-  (let* ((ast (parse-for-edit text recovery))
-         (node (find-form-at ast text line col)))
+   (let* ((ast (parse-for-edit text recovery))
+          (node (find-form-at ast text line col)))
     (unless node
       (error "No form found at line ~a, col ~a" line col))
-    (let ((node-line (node-line node))
-          (node-col (node-col node)))
-      (when (and node-line node-col)
-        (format *error-output* "Replacing form at line ~a, col ~a: ~a~%"
-                node-line node-col
-                (or (node-name node) (node-type node)))))
     (let ((start (node-start node))
           (end (node-end node)))
       (concatenate 'string
@@ -342,17 +325,8 @@
           (when parent (setf from-node parent))))
       (when (not (node-list-p to-node))
         (let ((parent (find-parent ast to-node)))
-          (when parent (setf to-node parent)))))
+           (when parent (setf to-node parent)))))
     (values from-node to-node)))
-
-(defun move-log-positions (from-node to-node)
-  "Log the source and destination positions for move operation."
-  (let ((fl (node-line from-node)) (fc (node-col from-node))
-        (tl (node-line to-node))    (tc (node-col to-node)))
-    (when (and fl fc)
-      (format *error-output* "Moving form from line ~a, col ~a~%" fl fc))
-    (when (and tl tc)
-      (format *error-output* "  to after line ~a, col ~a~%" tl tc))))
 
 (defun move-compute-regions (text from-node to-node)
   "Compute deletion and insertion regions for move operation."
@@ -378,7 +352,6 @@
     ;; No-op if same node
     (when (eq from-node to-node)
       (return-from move-form text))
-    (move-log-positions from-node to-node)
     (let* ((from-start (node-start from-node))
            (from-end (node-end from-node))
            (to-start (node-start to-node))
