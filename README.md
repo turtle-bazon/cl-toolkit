@@ -47,6 +47,18 @@ echo "(+ 1 2)" | cl-toolkit parse
 cat myfile.lisp | cl-toolkit validate
 ```
 
+## Positioning
+
+**All `--line` and `--col` values are 0-indexed.** Line 0 is the first line, column 0 is the first character.
+
+```bash
+# Line 0, Col 0 = first character of file
+cl-toolkit find --file demo.lisp --line 0 --col 0
+
+# Line 2, Col 1 = third line, second character
+cl-toolkit find --file demo.lisp --line 2 --col 1
+```
+
 ## Usage
 
 ```bash
