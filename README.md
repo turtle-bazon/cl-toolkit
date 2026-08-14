@@ -85,7 +85,7 @@ cl-toolkit insert --file myfile.lisp --line 5 --col 10 --insert " ; comment"
 cl-toolkit replace-form --file myfile.lisp --line 5 --col 2 --replace "(replaced-form)"
 
 # Move form
-cl-toolkit move --file myfile.lisp --from-line 5 --from-col 2 --to-line 10 --to-col 2
+cl-toolkit move-form --file myfile.lisp --from-line 5 --from-col 2 --to-line 10 --to-col 2
 
 # Check balance
 cl-toolkit balance --file myfile.lisp
@@ -154,7 +154,7 @@ cl-toolkit insert --file demo.lisp --line 0 --col 12 --insert " ; comment"
 ## Output Behavior
 
 - **Read-only commands** (parse, validate, balance, etc.) output JSON to stdout
-- **Modification commands** (delete-form, insert-form, append-form, replace-form, format, move) output plain text to stdout when not using `--write`
+- **Modification commands** (delete-form, insert-form, append-form, replace-form, format, move-form) output plain text to stdout when not using `--write`
 - **With `--write`**, results are written to the file (creates `.bak` backup) and a unified diff is printed to stdout
 - **No changes** — if the operation produces no actual changes, "No changes made." is printed instead
 
@@ -256,7 +256,7 @@ node ~/cl-toolkit/setup.js .opencode
 ### Agent Usage
 
 Tell the agent:
-> Use cl-toolkit to parse/validate/edit Lisp code. Commands: parse, validate, find, extract, top-level, delete-form, insert-form, append-form, insert, replace-form, move, balance, format.
+> Use cl-toolkit to parse/validate/edit Lisp code. Commands: parse, validate, find, extract, top-level, delete-form, insert-form, append-form, insert, replace-form, move-form, balance, format.
 
 Example prompts:
 - "Parse this file and show me the top-level forms"
