@@ -196,7 +196,7 @@ cl-toolkit replace-form --file myfile.lisp --line 5 --col 2 \
 
 ### `insert-form` and `append-form`
 
-Client controls newlines by including them in the insert code:
+Client controls newlines by including them in the insert code. This is intentional — the tool inserts code as-is without adding automatic newlines, giving the caller full control over formatting:
 
 ```bash
 # Add newline before
@@ -206,6 +206,13 @@ cl-toolkit insert-form --file demo.lisp --line 0 --col 0 --insert "(defun bar ()
 # Add newline after
 cl-toolkit append-form --file demo.lisp --line 0 --col 0 --insert "
 (defun baz () 3)"
+```
+
+Without leading/trailing newlines in `--insert`, the code is inserted inline:
+
+```bash
+# Inline insertion (no newlines)
+cl-toolkit insert-form --file demo.lisp --line 0 --col 12 --insert " ; comment"
 ```
 
 ### `insert`

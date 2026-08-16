@@ -354,38 +354,63 @@
       (return-from move-form text))
     (let* ((from-start (node-start from-node))
            (from-end (node-end from-node))
-           (to-start (node-start to-node))
            (to-end (node-end to-node))
-           (form-text (subseq text from-start from-end))
-           ;; Skip whitespace after source form
-           (del-end (skip-whitespace-and-newlines text from-end)))
-      ;; Compute insertion point
-      (let ((insert-at (if (< from-end to-start)
-                           ;; Source before destination: insert after destination
-                           to-end
-                           ;; Source after destination: insert before destination
-                           to-start)))
-        ;; Delete source form and its trailing whitespace
-        (let ((after-delete (concatenate 'string
-                                         (subseq text 0 from-start)
-                                         (subseq text del-end))))
-          ;; Ensure newline before insert point
-          (when (and (> insert-at 0)
-                     (< insert-at (length after-delete))
-                     (char/= (char after-delete (1- insert-at)) #\Newline)
-                     (char/= (char after-delete insert-at) #\Newline))
-            (setf insert-at (1+ insert-at)))
-          ;; Ensure newline after form
-          (let ((insert-code (if (and (> (length form-text) 0)
-                                     (char= (char form-text (1- (length form-text))) #\Newline))
-                                form-text
-                                (concatenate 'string form-text (string #\Newline)))))
-            (setf insert-at (min insert-at (length after-delete)))
+           (form-text (subseq text from-start from-end)))
+      ;; Step 1: Delete the source form's entire line
+      ;; Find the line boundaries in the original text
+      (let* ((del-start
+              ;; Walk backward to find preceding newline (or start of file)
+              ;; We want del-start to be the position of the \n itself
+              (let ((i from-start))
+                (loop while (and (> i 0)
+                                 (char/= (char text (1- i)) #\Newline))
+                      do (decf i))
+                ;; i is now at the first char after the preceding \n
+                ;; Back up one more to include the \n in the deletion
+                (if (and (> i 0) (char= (char text (1- i)) #\Newline))
+                    (1- i)
+                    i)))
+             (del-end
+              ;; The source form ends at from-end. Don't delete past it
+              ;; (the closing parens after it belong to the parent form)
+              from-end)
+             (deleted-text (subseq text del-start del-end))
+             (before-del (subseq text 0 del-start))
+             (after-del (subseq text del-end)))
+        ;; Step 2: In the text after deletion, find the destination node
+        ;; Re-parse the deleted text to find where to insert
+        (let* ((deleted-text-str (concatenate 'string before-del after-del))
+               (deleted-ast (parse-for-edit deleted-text-str recovery))
+               ;; Find the destination node in the re-parsed text
+               (dest-text (subseq text (node-start to-node) to-end))
+               (dest-pos (search dest-text deleted-text-str))
+               (nl (string #\Newline)))
+          ;; Insert after the destination form on a new line
+          ;; Find the indentation of the destination form
+          (let* ((line-start
+                  (let ((i dest-pos))
+                    (loop while (and (> i 0)
+                                     (char/= (char deleted-text-str (1- i)) #\Newline))
+                          do (decf i))
+                    i))
+                 (indent (let ((i line-start))
+                           (loop while (and (< i (length deleted-text-str))
+                                            (char= (char deleted-text-str i) #\Space))
+                                 do (incf i))
+                           (- i line-start)))
+                 (indented-form (concatenate 'string
+                                             (make-string indent :initial-element #\Space)
+                                             form-text))
+                 ;; Insert right after the destination form's closing paren
+                 ;; Position dest-end is right after the clause, before parent's closing )
+                 (dest-end (+ dest-pos (length dest-text))))
+            ;; Build result: everything before dest end + newline + indented form + rest
             (concatenate 'string
-                         (subseq after-delete 0 insert-at)
-                         insert-code
-                         (subseq after-delete insert-at))))))))
-
+                         (subseq deleted-text-str 0 dest-end)
+                         nl
+                         indented-form
+                         nl
+                         (subseq deleted-text-str dest-end))))))))
 ;;; ============================================================
 ;;; Balance Analysis
 ;;; ============================================================
