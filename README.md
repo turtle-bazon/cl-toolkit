@@ -164,6 +164,31 @@ cl-toolkit insert --file demo.lisp --line 0 --col 12 --insert " ; comment"
 | `balance` | Analyze parenthesis balance |
 | `format` | Reformat source with consistent indentation |
 
+### Move-Form Behavior
+
+`move-form` moves a form from one position to **after** another position. The source form is deleted from its original location and inserted on a new line after the destination.
+
+```bash
+# Move cond clause 1 after clause 2
+echo '(cond
+  ((= x 1) "one")
+  ((= x 2) "two"))' | cl-toolkit move-form --from-line 1 --from-col 2 --to-line 2 --to-col 2
+# Result:
+# (cond
+#   ((= x 2) "two")
+#   ((= x 1) "one"))
+```
+
+**Key behaviors:**
+- **Indentation preserved** — moved form keeps its original indentation relative to siblings
+- **Spacing matched** — blank lines between top-level forms are preserved
+- **Dest promotion** — if coordinates point inside a nested expression, the dest is auto-promoted to the nearest sibling form
+- **Ancestor validation** — returns error if source and dest are in a parent-child relationship
+
+**Limitations:**
+- Cannot reorder elements within a list (e.g., let bindings). Use `replace-form` instead
+- Moves always insert **after** the destination. To move before a form, point to the preceding form
+
 ## Output Behavior
 
 - **Read-only commands** (parse, validate, balance, etc.) output JSON to stdout
