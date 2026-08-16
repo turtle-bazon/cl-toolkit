@@ -326,6 +326,17 @@
       (when (not (node-list-p to-node))
         (let ((parent (find-parent ast to-node)))
            (when parent (setf to-node parent)))))
+    ;; Validate: source and dest must not be ancestors of each other
+    (labels ((ancestor-p (ancestor descendant)
+               (when (node-children ancestor)
+                 (dolist (child (node-children ancestor))
+                   (when (eq child descendant) (return t))
+                   (when (and (nodep child) (ancestor-p child descendant))
+                     (return t))))))
+      (when (ancestor-p from-node to-node)
+        (error "Cannot move a form into itself (destination is inside source)"))
+      (when (ancestor-p to-node from-node)
+        (error "Cannot move a form into itself (source is inside destination)")))
     (values from-node to-node)))
 
 (defun move-compute-regions (text from-node to-node)
@@ -374,43 +385,49 @@
               ;; The source form ends at from-end. Don't delete past it
               ;; (the closing parens after it belong to the parent form)
               from-end)
-             (deleted-text (subseq text del-start del-end))
-             (before-del (subseq text 0 del-start))
+              (before-del (subseq text 0 del-start))
              (after-del (subseq text del-end)))
         ;; Step 2: In the text after deletion, find the destination node
         ;; Re-parse the deleted text to find where to insert
-        (let* ((deleted-text-str (concatenate 'string before-del after-del))
-               (deleted-ast (parse-for-edit deleted-text-str recovery))
-               ;; Find the destination node in the re-parsed text
-               (dest-text (subseq text (node-start to-node) to-end))
-               (dest-pos (search dest-text deleted-text-str))
-               (nl (string #\Newline)))
-          ;; Insert after the destination form on a new line
-          ;; Find the indentation of the destination form
-          (let* ((line-start
-                  (let ((i dest-pos))
-                    (loop while (and (> i 0)
-                                     (char/= (char deleted-text-str (1- i)) #\Newline))
-                          do (decf i))
-                    i))
-                 (indent (let ((i line-start))
-                           (loop while (and (< i (length deleted-text-str))
-                                            (char= (char deleted-text-str i) #\Space))
-                                 do (incf i))
-                           (- i line-start)))
-                 (indented-form (concatenate 'string
-                                             (make-string indent :initial-element #\Space)
-                                             form-text))
-                 ;; Insert right after the destination form's closing paren
-                 ;; Position dest-end is right after the clause, before parent's closing )
-                 (dest-end (+ dest-pos (length dest-text))))
-            ;; Build result: everything before dest end + newline + indented form + rest
-            (concatenate 'string
-                         (subseq deleted-text-str 0 dest-end)
-                         nl
-                         indented-form
-                         nl
-                         (subseq deleted-text-str dest-end))))))))
+         (let* ((deleted-text-str (concatenate 'string before-del after-del))
+                ;; Find the destination node in the post-deletion text
+                (dest-text (subseq text (node-start to-node) to-end))
+                (dest-pos (search dest-text deleted-text-str)))
+           (unless dest-pos
+             (error "Destination form not found after deletion"))
+           ;; Insert after the destination form on a new line
+           ;; Find the indentation of the destination form
+           (let* ((line-start
+                   (let ((i dest-pos))
+                     (loop while (and (> i 0)
+                                      (char/= (char deleted-text-str (1- i)) #\Newline))
+                           do (decf i))
+                     i))
+                  (indent (let ((i line-start))
+                            (loop while (and (< i (length deleted-text-str))
+                                             (char= (char deleted-text-str i) #\Space))
+                                  do (incf i))
+                            (- i line-start)))
+                  (indented-form (concatenate 'string
+                                              (make-string indent :initial-element #\Space)
+                                              form-text))
+                  ;; Insert right after the destination form's closing paren
+                  (dest-end (+ dest-pos (length dest-text)))
+                  ;; Count leading newlines after dest to determine spacing context
+                  (rest-after-dest (subseq deleted-text-str dest-end))
+                  (num-leading-nls (let ((count 0))
+                                     (loop for ch across rest-after-dest
+                                           while (char= ch #\Newline)
+                                           do (incf count))
+                                     count))
+                  ;; Use same number of newlines as original spacing (minimum 1)
+                  (spacing-nls (max 1 num-leading-nls)))
+             ;; Build result: dest + spacing + indented form + rest
+             (concatenate 'string
+                          (subseq deleted-text-str 0 dest-end)
+                          (make-string spacing-nls :initial-element #\Newline)
+                          indented-form
+                          (subseq deleted-text-str dest-end))))))))
 ;;; ============================================================
 ;;; Balance Analysis
 ;;; ============================================================
