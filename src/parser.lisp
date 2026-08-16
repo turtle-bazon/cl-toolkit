@@ -325,7 +325,25 @@
           (when parent (setf from-node parent))))
       (when (not (node-list-p to-node))
         (let ((parent (find-parent ast to-node)))
-           (when parent (setf to-node parent)))))
+           (when parent (setf to-node parent))))
+      ;; Promote to-node to be a sibling of from-node.
+      ;; If the user's destination coordinates point inside a nested expression
+      ;; (e.g., inside setf or error clause), walk up to the form that is
+      ;; actually a sibling of the source.
+      (let ((from-parent (find-parent ast from-node)))
+        (when from-parent
+          (let ((to-parent (find-parent ast to-node)))
+            (unless (eq from-parent to-parent)
+              ;; Walk up from to-node to find a child of from-parent
+              (labels ((find-child-of-parent (n)
+                         (let ((p (find-parent ast n)))
+                           (cond
+                             ((null p) nil)
+                             ((eq p from-parent) n)
+                             (t (find-child-of-parent p))))))
+                (let ((promoted (find-child-of-parent to-node)))
+                  (when promoted
+                    (setf to-node promoted)))))))))
     ;; Validate: source and dest must not be ancestors of each other
     (labels ((ancestor-p (ancestor descendant)
                (when (node-children ancestor)
