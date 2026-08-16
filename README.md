@@ -98,6 +98,7 @@ cl-toolkit replace-form --file myfile.lisp --line 5 --col 2 --replace "(replaced
 
 # Move form
 cl-toolkit move-form --file myfile.lisp --from-line 5 --from-col 2 --to-line 10 --to-col 2
+# Note: Cannot move a form into itself (source inside dest or vice versa)
 
 # Check balance
 cl-toolkit balance --file myfile.lisp
@@ -159,7 +160,7 @@ cl-toolkit insert --file demo.lisp --line 0 --col 12 --insert " ; comment"
 | `find` | Find form at position |
 | `extract` | Extract forms in a range |
 | `top-level` | List top-level forms |
-| `move-form` | Move form from one position to another |
+| `move-form` | Move form from one position to another (preserves indentation, validates no self-reference) |
 | `balance` | Analyze parenthesis balance |
 | `format` | Reformat source with consistent indentation |
 
