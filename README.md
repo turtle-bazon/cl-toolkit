@@ -83,6 +83,8 @@ echo "(defun foo () (bar))" | cl-toolkit top-level
 # Delete form
 cl-toolkit delete-form --file myfile.lisp --line 5 --col 2
 cl-toolkit delete-form --file myfile.lisp --index 0
+cl-toolkit delete-form --file myfile.lisp --name bar  # Delete by name
+cl-toolkit delete-form --file myfile.lisp --name bar --preview  # Show diff first
 echo "(defun foo ()) (defun bar ())" | cl-toolkit delete-form --index 0
 
 # Insert code before a form
@@ -97,6 +99,8 @@ cl-toolkit insert --file myfile.lisp --line 5 --col 10 --insert " ; comment"
 # Replace form
 cl-toolkit replace-form --file myfile.lisp --line 5 --col 2 --replace "(replaced-form)"
 cl-toolkit replace-form --file myfile.lisp --index 0 --replace "(replaced)" --pretty  # Preserve indentation
+cl-toolkit replace-form --file myfile.lisp --name bar --replace "(defun bar () 42)"  # By name
+cl-toolkit replace-form --file myfile.lisp --name bar --replace "..." --preview  # Show diff
 cl-toolkit replace-form --file myfile.lisp --index 0 --replace "(replaced)" --write  # In-place
 
 # Batch operations (multiple edits at once)
