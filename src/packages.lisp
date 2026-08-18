@@ -60,7 +60,9 @@
                 #:node-list-p
                 #:node-error-p
                 #:node-to-json
-                #:node-to-json-string)
+                #:node-to-json-string
+                #:node-form-name
+                #:node-form-count)
   (:export
    #:parse-file
    #:parse-string
@@ -76,8 +78,11 @@
    #:delete-top-level-at
    #:insert-form-at
    #:insert-form-end
-   #:replace-form-at
-   #:move-form
+    #:replace-form-at
+    #:replace-form-pretty
+    #:find-top-level-by-name
+    #:delete-node-from-text
+    #:move-form
    #:apply-edit
    #:cl-toolkit-main
    #:main))

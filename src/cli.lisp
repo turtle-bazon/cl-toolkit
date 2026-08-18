@@ -88,9 +88,21 @@
       (unless quiet
         (format *error-output* "Wrote ~a (backup: ~a)~%" file bak)))))
 
+(defun preview-edit (original-text result file)
+  "Show diff preview of changes without writing."
+  (let ((diff (generate-unified-diff original-text result file)))
+    (if diff
+        (format *standard-output* "~a" diff)
+        (format *standard-output* "No changes made.~%"))))
+
 ;;; ============================================================
 ;;; Shared Options
 ;;; ============================================================
+
+(defun make-preview-option ()
+  (clingon:make-option :flag :long-name "preview"
+                       :description "Show diff preview without writing"
+                       :key :preview))
 
 (defun make-recovery-option ()
   "Create the --recovery option."
@@ -420,7 +432,9 @@
   (let* ((line (clingon:getopt cmd :line))
          (col (clingon:getopt cmd :col))
          (index (clingon:getopt cmd :index))
+         (name (clingon:getopt cmd :name))
          (write (clingon:getopt cmd :write))
+         (preview (clingon:getopt cmd :preview))
          (quiet (clingon:getopt cmd :quiet))
          (recovery (clingon:getopt cmd :recovery))
          (no-validate-result (clingon:getopt cmd :no-validate-result))
@@ -430,12 +444,18 @@
     (handler-case
         (let ((result
                 (cond
+                  (name
+                   (let ((node (find-top-level-by-name text name :recovery recovery)))
+                     (unless node
+                       (format *error-output* "Error: No top-level form named '~a'~%" name)
+                       (clingon:exit 1))
+                     (delete-node-from-text text node)))
                   (index
                    (delete-top-level-at text index :recovery recovery))
                   ((and line col)
                    (delete-form-at text line col :recovery recovery))
                   (t
-                   (format *error-output* "Error: --line/--col or --index required~%")
+                   (format *error-output* "Error: --line/--col, --index, or --name required~%")
                    (clingon:exit 1)))))
           ;; Validate result (unless --no-validate-result)
           (when (and (not no-validate-result) result (> (length result) 0))
@@ -446,29 +466,37 @@
                 (format *error-output* "Result validation failed: ~a~%"
                         (node-value result-ast))
                 (clingon:exit 1))))
-          (if write
-              (if file
-                  (let ((diff (generate-unified-diff original-text result file)))
-                    (write-result-to-file file result quiet)
-                    (if diff
-                        (format *standard-output* "~a" diff)
-                        (format *standard-output* "No changes made.~%")))
-                  (progn
-                    (format *error-output* "Error: --write requires --file~%")
-                    (clingon:exit 1)))
-              (format *standard-output* "~a" result)))
+          (cond
+            (preview
+             (if file
+                 (preview-edit original-text result file)
+                 (progn
+                   (format *error-output* "Error: --preview requires --file~%")
+                   (clingon:exit 1))))
+            (write
+             (if file
+                 (let ((diff (generate-unified-diff original-text result file)))
+                   (write-result-to-file file result quiet)
+                   (if diff
+                       (format *standard-output* "~a" diff)
+                       (format *standard-output* "No changes made.~%")))
+                 (progn
+                   (format *error-output* "Error: --write requires --file~%")
+                   (clingon:exit 1))))
+            (t (format *standard-output* "~a" result))))
       (error (c)
         (output-edit-result nil (format nil "~a" c))))))
 
 (defun delete-form/command ()
   (clingon:make-command
    :name "delete-form"
-   :usage "(-f FILE | --code CODE) (--line L --col C | --index N)"
-   :description "Delete form at position or by index"
+   :usage "(-f FILE | --code CODE) (--line L --col C | --index N | --name NAME)"
+   :description "Delete form at position, by index, or by name"
    :long-description "Delete a form from the source. ~
-                      Use --line/--col to delete by position, or --index to delete ~
-                      the N-th top-level form. Validates result by default; ~
-                      use --no-validate-result to skip."
+                      Use --line/--col to delete by position, --index to delete ~
+                      the N-th top-level form, or --name to delete by form name. ~
+                      Use --preview to see changes before applying. ~
+                      Validates result by default; use --no-validate-result to skip."
    :options (list
               (clingon:make-option :string :long-name "file" :short-name #\f
                                    :description "File to edit" :key :file)
@@ -480,7 +508,10 @@
                                    :description "Column number" :key :col)
               (clingon:make-option :integer :long-name "index"
                                    :description "Top-level form index (0-based)" :key :index)
+              (clingon:make-option :string :long-name "name" :short-name #\n
+                                   :description "Top-level form name" :key :name)
               (make-write-option)
+              (make-preview-option)
               (make-quiet-option)
               (make-recovery-option)
               (clingon:make-option :flag :long-name "no-validate-result"
@@ -497,11 +528,12 @@
   (let* ((line (clingon:getopt cmd :line))
          (col (clingon:getopt cmd :col))
          (insert-code (clingon:getopt cmd :insert-code))
-         (write (clingon:getopt cmd :write))
-         (quiet (clingon:getopt cmd :quiet))
-         (file (clingon:getopt cmd :file))
-         (text (read-input cmd))
-         (original-text (when file (read-file-to-string file))))
+          (write (clingon:getopt cmd :write))
+          (preview (clingon:getopt cmd :preview))
+          (quiet (clingon:getopt cmd :quiet))
+          (file (clingon:getopt cmd :file))
+          (text (read-input cmd))
+          (original-text (when file (read-file-to-string file))))
     (unless (and line col insert-code)
       (format *error-output* "Error: --line, --col, and --insert are required~%")
       (clingon:exit 1))
@@ -515,17 +547,24 @@
                                  (subseq text 0 offset)
                                  insert-code
                                  (subseq text offset))))
-        (if write
-            (if file
-                (let ((diff (generate-unified-diff original-text result file)))
-                  (write-result-to-file file result quiet)
-                  (if diff
-                      (format *standard-output* "~a" diff)
-                      (format *standard-output* "No changes made.~%")))
-                (progn
-                  (format *error-output* "Error: --write requires --file~%")
-                  (clingon:exit 1)))
-            (format *standard-output* "~a" result))))))
+        (cond
+          (preview
+           (if file
+               (preview-edit original-text result file)
+               (progn
+                 (format *error-output* "Error: --preview requires --file~%")
+                 (clingon:exit 1))))
+          (write
+           (if file
+               (let ((diff (generate-unified-diff original-text result file)))
+                 (write-result-to-file file result quiet)
+                 (if diff
+                     (format *standard-output* "~a" diff)
+                     (format *standard-output* "No changes made.~%")))
+               (progn
+                 (format *error-output* "Error: --write requires --file~%")
+                 (clingon:exit 1))))
+          (t (format *standard-output* "~a" result)))))))
 
 (defun insert-at/command ()
   (clingon:make-command
@@ -545,8 +584,9 @@
                                   :description "Column number" :required t :key :col)
              (clingon:make-option :string :long-name "insert" :short-name #\i
                                   :description "Code to insert" :required t :key :insert-code)
-             (make-write-option)
-             (make-quiet-option))
+              (make-write-option)
+              (make-preview-option)
+              (make-quiet-option))
    :handler #'insert-at/handler))
 
 ;;; ============================================================
@@ -557,14 +597,15 @@
   (let* ((line (clingon:getopt cmd :line))
          (col (clingon:getopt cmd :col))
          (insert-code (clingon:getopt cmd :insert-code))
-         (write (clingon:getopt cmd :write))
-         (quiet (clingon:getopt cmd :quiet))
-         (recovery (clingon:getopt cmd :recovery))
-         (no-validate-input (clingon:getopt cmd :no-validate-input))
-         (no-validate-result (clingon:getopt cmd :no-validate-result))
-         (file (clingon:getopt cmd :file))
-         (text (read-input cmd))
-         (original-text (when file (read-file-to-string file))))
+          (write (clingon:getopt cmd :write))
+          (preview (clingon:getopt cmd :preview))
+          (quiet (clingon:getopt cmd :quiet))
+          (recovery (clingon:getopt cmd :recovery))
+          (no-validate-input (clingon:getopt cmd :no-validate-input))
+          (no-validate-result (clingon:getopt cmd :no-validate-result))
+          (file (clingon:getopt cmd :file))
+          (text (read-input cmd))
+          (original-text (when file (read-file-to-string file))))
     ;; Validate input code before operation (unless --no-validate-input)
     (when (and (not no-validate-input) insert-code)
       (let ((input-ast (cl-toolkit-grammar::parse-lisp-source insert-code)))
@@ -589,17 +630,24 @@
                 (format *error-output* "Result validation failed: ~a~%"
                         (node-value result-ast))
                 (clingon:exit 1))))
-          (if write
-              (if file
-                  (let ((diff (generate-unified-diff original-text result file)))
-                    (write-result-to-file file result quiet)
-                    (if diff
-                        (format *standard-output* "~a" diff)
-                        (format *standard-output* "No changes made.~%")))
-                  (progn
-                    (format *error-output* "Error: --write requires --file~%")
-                    (clingon:exit 1)))
-              (format *standard-output* "~a" result)))
+          (cond
+            (preview
+             (if file
+                 (preview-edit original-text result file)
+                 (progn
+                   (format *error-output* "Error: --preview requires --file~%")
+                   (clingon:exit 1))))
+            (write
+             (if file
+                 (let ((diff (generate-unified-diff original-text result file)))
+                   (write-result-to-file file result quiet)
+                   (if diff
+                       (format *standard-output* "~a" diff)
+                       (format *standard-output* "No changes made.~%")))
+                 (progn
+                   (format *error-output* "Error: --write requires --file~%")
+                   (clingon:exit 1))))
+            (t (format *standard-output* "~a" result))))
       (error (c)
         (output-edit-result nil (format nil "~a" c))))))
 
@@ -623,6 +671,7 @@
                (clingon:make-option :string :long-name "insert" :short-name #\i
                                     :description "Code to insert" :key :insert-code)
                (make-write-option)
+              (make-preview-option)
               (make-quiet-option)
               (make-recovery-option)
               (clingon:make-option :flag :long-name "no-validate-input"
@@ -641,14 +690,15 @@
   (let* ((line (clingon:getopt cmd :line))
          (col (clingon:getopt cmd :col))
          (insert-code (clingon:getopt cmd :insert-code))
-         (write (clingon:getopt cmd :write))
-         (quiet (clingon:getopt cmd :quiet))
-         (recovery (clingon:getopt cmd :recovery))
-         (no-validate-input (clingon:getopt cmd :no-validate-input))
-         (no-validate-result (clingon:getopt cmd :no-validate-result))
-         (file (clingon:getopt cmd :file))
-         (text (read-input cmd))
-         (original-text (when file (read-file-to-string file))))
+          (write (clingon:getopt cmd :write))
+          (preview (clingon:getopt cmd :preview))
+          (quiet (clingon:getopt cmd :quiet))
+          (recovery (clingon:getopt cmd :recovery))
+          (no-validate-input (clingon:getopt cmd :no-validate-input))
+          (no-validate-result (clingon:getopt cmd :no-validate-result))
+          (file (clingon:getopt cmd :file))
+          (text (read-input cmd))
+          (original-text (when file (read-file-to-string file))))
     (unless (and line col insert-code)
       (format *error-output* "Error: --line, --col, and --insert are required~%")
       (clingon:exit 1))
@@ -670,17 +720,24 @@
                 (format *error-output* "Result validation failed: ~a~%"
                         (node-value result-ast))
                 (clingon:exit 1))))
-          (if write
-              (if file
-                  (let ((diff (generate-unified-diff original-text result file)))
-                    (write-result-to-file file result quiet)
-                    (if diff
-                        (format *standard-output* "~a" diff)
-                        (format *standard-output* "No changes made.~%")))
-                  (progn
-                    (format *error-output* "Error: --write requires --file~%")
-                    (clingon:exit 1)))
-              (format *standard-output* "~a" result)))
+          (cond
+            (preview
+             (if file
+                 (preview-edit original-text result file)
+                 (progn
+                   (format *error-output* "Error: --preview requires --file~%")
+                   (clingon:exit 1))))
+            (write
+             (if file
+                 (let ((diff (generate-unified-diff original-text result file)))
+                   (write-result-to-file file result quiet)
+                   (if diff
+                       (format *standard-output* "~a" diff)
+                       (format *standard-output* "No changes made.~%")))
+                 (progn
+                   (format *error-output* "Error: --write requires --file~%")
+                   (clingon:exit 1))))
+            (t (format *standard-output* "~a" result))))
       (error (c)
         (output-edit-result nil (format nil "~a" c))))))
 
@@ -703,6 +760,7 @@
                (clingon:make-option :string :long-name "insert" :short-name #\i
                                     :description "Code to insert" :key :insert-code)
                (make-write-option)
+              (make-preview-option)
               (make-quiet-option)
               (make-recovery-option)
               (clingon:make-option :flag :long-name "no-validate-input"
@@ -721,9 +779,11 @@
   (let* ((line (clingon:getopt cmd :line))
          (col (clingon:getopt cmd :col))
          (index (clingon:getopt cmd :index))
+         (name (clingon:getopt cmd :name))
          (pretty (clingon:getopt cmd :pretty))
          (replace-code (clingon:getopt cmd :replace-code))
          (write (clingon:getopt cmd :write))
+         (preview (clingon:getopt cmd :preview))
          (quiet (clingon:getopt cmd :quiet))
          (recovery (clingon:getopt cmd :recovery))
          (no-validate-input (clingon:getopt cmd :no-validate-input))
@@ -734,8 +794,8 @@
     (unless replace-code
       (format *error-output* "Error: --replace is required~%")
       (clingon:exit 1))
-    (unless (or (and line col) index)
-      (format *error-output* "Error: --line/--col or --index required~%")
+    (unless (or (and line col) index name)
+      (format *error-output* "Error: --line/--col, --index, or --name required~%")
       (clingon:exit 1))
     ;; Validate input code before operation (unless --no-validate-input)
     (when (not no-validate-input)
@@ -745,22 +805,36 @@
                   (node-value input-ast))
           (clingon:exit 1))))
     (handler-case
-        (let ((result (if index
-                          (if pretty
-                              (let* ((ast (parse-for-edit text recovery))
-                                     (forms (list-top-level ast))
-                                     (node (nth index forms)))
-                                (unless node
-                                  (error "Index ~a out of range" index))
-                                (replace-form-pretty text node replace-code))
-                              (replace-top-level-at text index replace-code :recovery recovery))
-                          (if pretty
-                              (let* ((ast (parse-for-edit text recovery))
-                                     (node (find-form-at ast text line col)))
-                                (unless node
-                                  (error "No form found at line ~a, col ~a" line col))
-                                (replace-form-pretty text node replace-code))
-                              (replace-form-at text line col replace-code :recovery recovery)))))
+        (let ((result (cond
+                        (name
+                         (let ((node (find-top-level-by-name text name :recovery recovery)))
+                           (unless node
+                             (error "No top-level form named '~a'" name))
+                           (if pretty
+                               (replace-form-pretty text node replace-code)
+                               (let ((start (node-start node))
+                                     (end (node-end node)))
+                                 (concatenate 'string
+                                              (subseq text 0 start)
+                                              replace-code
+                                              (subseq text end))))))
+                        (index
+                         (if pretty
+                             (let* ((ast (parse-for-edit text recovery))
+                                    (forms (list-top-level ast))
+                                    (node (nth index forms)))
+                               (unless node
+                                 (error "Index ~a out of range" index))
+                               (replace-form-pretty text node replace-code))
+                             (replace-top-level-at text index replace-code :recovery recovery)))
+                        (t
+                         (if pretty
+                             (let* ((ast (parse-for-edit text recovery))
+                                    (node (find-form-at ast text line col)))
+                               (unless node
+                                 (error "No form found at line ~a, col ~a" line col))
+                               (replace-form-pretty text node replace-code))
+                             (replace-form-at text line col replace-code :recovery recovery))))))
           ;; Validate result (unless --no-validate-result)
           (when (not no-validate-result)
             (let ((result-ast (if recovery
@@ -770,28 +844,37 @@
                 (format *error-output* "Result validation failed: ~a~%"
                         (node-value result-ast))
                 (clingon:exit 1))))
-          (if write
-              (if file
-                  (let ((diff (generate-unified-diff original-text result file)))
-                    (write-result-to-file file result quiet)
-                    (if diff
-                        (format *standard-output* "~a" diff)
-                        (format *standard-output* "No changes made.~%")))
-                  (progn
-                    (format *error-output* "Error: --write requires --file~%")
-                    (clingon:exit 1)))
-              (format *standard-output* "~a" result)))
+          (cond
+            (preview
+             (if file
+                 (preview-edit original-text result file)
+                 (progn
+                   (format *error-output* "Error: --preview requires --file~%")
+                   (clingon:exit 1))))
+            (write
+             (if file
+                 (let ((diff (generate-unified-diff original-text result file)))
+                   (write-result-to-file file result quiet)
+                   (if diff
+                       (format *standard-output* "~a" diff)
+                       (format *standard-output* "No changes made.~%")))
+                 (progn
+                   (format *error-output* "Error: --write requires --file~%")
+                   (clingon:exit 1))))
+            (t (format *standard-output* "~a" result))))
       (error (c)
         (output-edit-result nil (format nil "~a" c))))))
 
 (defun replace-form/command ()
   (clingon:make-command
    :name "replace-form"
-   :usage "(-f FILE | --code CODE) (--line L --col C | --index N) --replace CODE [--pretty]"
-   :description "Replace form at position or by index with new code"
-   :long-description "Replace a form at the given position or by top-level index. ~
-                      Use --line/--col to replace by position, or --index to replace ~
-                      the N-th top-level form. Use --pretty to preserve indentation. ~
+   :usage "(-f FILE | --code CODE) (--line L --col C | --index N | --name NAME) --replace CODE [--pretty]"
+   :description "Replace form by position, index, or name with new code"
+   :long-description "Replace a form at the given position, by top-level index, or by name. ~
+                      Use --line/--col to replace by position, --index to replace ~
+                      the N-th top-level form, or --name to replace by form name. ~
+                      Use --pretty to preserve indentation. ~
+                      Use --preview to see changes before applying. ~
                       Validates both input and result by default. ~
                       Use --no-validate-input or --no-validate-result to skip specific validations."
    :options (list
@@ -805,12 +888,15 @@
                                   :description "Column number" :key :col)
              (clingon:make-option :integer :long-name "index"
                                   :description "Top-level form index (0-based)" :key :index)
+             (clingon:make-option :string :long-name "name" :short-name #\n
+                                  :description "Top-level form name" :key :name)
               (clingon:make-option :string :long-name "replace" :short-name #\r
                                    :description "Replacement code" :required t :key :replace-code)
              (clingon:make-option :flag :long-name "pretty"
                                   :description "Preserve indentation of replaced form"
                                   :key :pretty)
              (make-write-option)
+             (make-preview-option)
              (make-quiet-option)
              (make-recovery-option)
              (clingon:make-option :flag :long-name "no-validate-input"
@@ -830,26 +916,34 @@
          (from-col (clingon:getopt cmd :from-col))
          (to-line (clingon:getopt cmd :to-line))
          (to-col (clingon:getopt cmd :to-col))
-         (write (clingon:getopt cmd :write))
-         (quiet (clingon:getopt cmd :quiet))
-         (recovery (clingon:getopt cmd :recovery))
-         (file (clingon:getopt cmd :file))
-         (text (read-input cmd))
-         (original-text (when file (read-file-to-string file))))
+          (write (clingon:getopt cmd :write))
+          (preview (clingon:getopt cmd :preview))
+          (quiet (clingon:getopt cmd :quiet))
+          (recovery (clingon:getopt cmd :recovery))
+          (file (clingon:getopt cmd :file))
+          (text (read-input cmd))
+          (original-text (when file (read-file-to-string file))))
     (handler-case
         (let ((result (move-form text from-line from-col to-line to-col
                                  :recovery recovery)))
-          (if write
-              (if file
-                  (let ((diff (generate-unified-diff original-text result file)))
-                    (write-result-to-file file result quiet)
-                    (if diff
-                        (format *standard-output* "~a" diff)
-                        (format *standard-output* "No changes made.~%")))
-                  (progn
-                    (format *error-output* "Error: --write requires --file~%")
-                    (clingon:exit 1)))
-              (format *standard-output* "~a" result)))
+          (cond
+            (preview
+             (if file
+                 (preview-edit original-text result file)
+                 (progn
+                   (format *error-output* "Error: --preview requires --file~%")
+                   (clingon:exit 1))))
+            (write
+             (if file
+                 (let ((diff (generate-unified-diff original-text result file)))
+                   (write-result-to-file file result quiet)
+                   (if diff
+                       (format *standard-output* "~a" diff)
+                       (format *standard-output* "No changes made.~%")))
+                 (progn
+                   (format *error-output* "Error: --write requires --file~%")
+                   (clingon:exit 1))))
+            (t (format *standard-output* "~a" result))))
       (error (c)
         (output-edit-result nil (format nil "~a" c))))))
 
@@ -871,9 +965,10 @@
                                   :description "Dest line" :required t :key :to-line)
              (clingon:make-option :integer :long-name "to-col" :short-name #\b
                                   :description "Dest col" :required t :key :to-col)
-             (make-write-option)
-             (make-quiet-option)
-             (make-recovery-option))
+              (make-write-option)
+              (make-preview-option)
+              (make-quiet-option)
+              (make-recovery-option))
    :handler #'move/handler))
 
 ;;; ============================================================
@@ -882,13 +977,14 @@
 
 (defun batch-replace/handler (cmd)
   (let* ((edits-json (clingon:getopt cmd :edits))
-         (write (clingon:getopt cmd :write))
-         (quiet (clingon:getopt cmd :quiet))
-         (recovery (clingon:getopt cmd :recovery))
-         (pretty (clingon:getopt cmd :pretty))
-         (file (clingon:getopt cmd :file))
-         (text (read-input cmd))
-         (original-text (when file (read-file-to-string file))))
+          (write (clingon:getopt cmd :write))
+          (preview (clingon:getopt cmd :preview))
+          (quiet (clingon:getopt cmd :quiet))
+          (recovery (clingon:getopt cmd :recovery))
+          (pretty (clingon:getopt cmd :pretty))
+          (file (clingon:getopt cmd :file))
+          (text (read-input cmd))
+          (original-text (when file (read-file-to-string file))))
     (unless edits-json
       (format *error-output* "Error: --edits is required~%")
       (clingon:exit 1))
@@ -910,17 +1006,24 @@
                                               :pretty pretty)))
                                     edits-list))
                (result (apply-batch-edits text edit-plists :recovery recovery)))
-          (if write
-              (if file
-                  (let ((diff (generate-unified-diff original-text result file)))
-                    (write-result-to-file file result quiet)
-                    (if diff
-                        (format *standard-output* "~a" diff)
-                        (format *standard-output* "No changes made.~%")))
-                  (progn
-                    (format *error-output* "Error: --write requires --file~%")
-                    (clingon:exit 1)))
-              (format *standard-output* "~a" result)))
+          (cond
+            (preview
+             (if file
+                 (preview-edit original-text result file)
+                 (progn
+                   (format *error-output* "Error: --preview requires --file~%")
+                   (clingon:exit 1))))
+            (write
+             (if file
+                 (let ((diff (generate-unified-diff original-text result file)))
+                   (write-result-to-file file result quiet)
+                   (if diff
+                       (format *standard-output* "~a" diff)
+                       (format *standard-output* "No changes made.~%")))
+                 (progn
+                   (format *error-output* "Error: --write requires --file~%")
+                   (clingon:exit 1))))
+            (t (format *standard-output* "~a" result))))
       (error (c)
         (format *error-output* "Error: ~a~%" c)
         (clingon:exit 1)))))
@@ -944,9 +1047,10 @@
              (clingon:make-option :flag :long-name "pretty"
                                   :description "Preserve indentation for all replacements"
                                   :key :pretty)
-             (make-write-option)
-             (make-quiet-option)
-             (make-recovery-option))
+              (make-write-option)
+              (make-preview-option)
+              (make-quiet-option)
+              (make-recovery-option))
    :handler #'batch-replace/handler))
 
 ;;; ============================================================

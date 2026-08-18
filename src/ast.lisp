@@ -46,19 +46,33 @@
 
 (defun node-form-name (node)
   "Extract a human-readable name from a top-level form node.
-   For lists (defun, defvar, etc.), returns the name of the first child symbol.
+   For defun/defvar/defmacro etc., returns the defined name (second child).
    For atoms, returns the symbol name or value."
   (cond
     ((not (nodep node)) nil)
     ((node-list-p node)
      (let ((children (node-children node)))
        (when (and children (nodep (first children)))
-         (cond
-           ((eq (node-type (first children)) :symbol)
-            (node-name (first children)))
-           ((node-list-p (first children))
-            (node-form-name (first children)))
-           (t nil)))))
+         (let ((form-type (node-name (first children))))
+           (when form-type
+             (cond
+               ;; For defun/defvar/defmacro/defgeneric/defclass etc,
+               ;; return the second child (the name being defined)
+               ((and (> (length children) 1)
+                     (nodep (second children))
+                     (member form-type '("defun" "defvar" "defparameter" "defmacro"
+                                         "defgeneric" "defclass" "defstruct"
+                                         "deftype" "defmethod"
+                                         "define-compiler-macro" "defsetf"
+                                         "define-setf-expander" "defpackage")
+                             :test #'string-equal))
+                (node-name (second children)))
+               ;; For other forms, return the first symbol
+               ((eq (node-type (first children)) :symbol)
+                (node-name (first children)))
+               ((node-list-p (first children))
+                (node-form-name (first children)))
+               (t nil)))))))
     ((eq (node-type node) :symbol) (node-name node))
     ((eq (node-type node) :number) (format nil "~a" (node-value node)))
     ((eq (node-type node) :string) (format nil "~s" (node-value node)))
