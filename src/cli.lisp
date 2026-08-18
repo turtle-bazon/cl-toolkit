@@ -705,6 +705,7 @@
 (defun replace/handler (cmd)
   (let* ((line (clingon:getopt cmd :line))
          (col (clingon:getopt cmd :col))
+         (index (clingon:getopt cmd :index))
          (replace-code (clingon:getopt cmd :replace-code))
          (write (clingon:getopt cmd :write))
          (quiet (clingon:getopt cmd :quiet))
@@ -714,8 +715,11 @@
          (file (clingon:getopt cmd :file))
          (text (read-input cmd))
          (original-text (when file (read-file-to-string file))))
-    (unless (and line col replace-code)
-      (format *error-output* "Error: --line, --col, and --replace are required~%")
+    (unless replace-code
+      (format *error-output* "Error: --replace is required~%")
+      (clingon:exit 1))
+    (unless (or (and line col) index)
+      (format *error-output* "Error: --line/--col or --index required~%")
       (clingon:exit 1))
     ;; Validate input code before operation (unless --no-validate-input)
     (when (not no-validate-input)
@@ -725,7 +729,9 @@
                   (node-value input-ast))
           (clingon:exit 1))))
     (handler-case
-        (let ((result (replace-form-at text line col replace-code :recovery recovery)))
+        (let ((result (if index
+                          (replace-top-level-at text index replace-code :recovery recovery)
+                          (replace-form-at text line col replace-code :recovery recovery))))
           ;; Validate result (unless --no-validate-result)
           (when (not no-validate-result)
             (let ((result-ast (if recovery
@@ -752,20 +758,23 @@
 (defun replace-form/command ()
   (clingon:make-command
    :name "replace-form"
-   :usage "(-f FILE | --code CODE) --line L --col C --replace CODE"
-   :description "Replace form at position with new code"
-   :long-description "Replace a form at the given position. Validates both input ~
-                      and result by default. Use --no-validate-input or ~
-                      --no-validate-result to skip specific validations."
+   :usage "(-f FILE | --code CODE) (--line L --col C | --index N) --replace CODE"
+   :description "Replace form at position or by index with new code"
+   :long-description "Replace a form at the given position or by top-level index. ~
+                      Use --line/--col to replace by position, or --index to replace ~
+                      the N-th top-level form. Validates both input and result by default. ~
+                      Use --no-validate-input or --no-validate-result to skip specific validations."
    :options (list
              (clingon:make-option :string :long-name "file" :short-name #\f
                                   :description "File to edit" :key :file)
              (clingon:make-option :string :long-name "source"
                                   :description "Source code to edit" :key :source)
              (clingon:make-option :integer :long-name "line" :short-name #\l
-                                  :description "Line number" :required t :key :line)
+                                  :description "Line number" :key :line)
              (clingon:make-option :integer :long-name "col" :short-name #\c
-                                  :description "Column number" :required t :key :col)
+                                  :description "Column number" :key :col)
+             (clingon:make-option :integer :long-name "index"
+                                  :description "Top-level form index (0-based)" :key :index)
               (clingon:make-option :string :long-name "replace" :short-name #\r
                                    :description "Replacement code" :required t :key :replace-code)
              (make-write-option)

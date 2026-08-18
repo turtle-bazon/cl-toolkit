@@ -127,16 +127,17 @@
 
 (defrule float-body
     (and integer-part #\. (+ digit) (? float-exponent))
-  (:destructure (int dot digits exp)
-    (declare (ignore dot))
-    (let ((frac (esrap:text digits))
-          (exp-str (if exp
-                       (concatenate 'string
-                                    (if (second exp) (string (second exp)) "")
-                                    (esrap:text (third exp)))
-                       "")))
-      (float (parse-integer (concatenate 'string (format nil "~a" int) "." frac exp-str))
-             1.0d0))))
+  (:lambda (result)
+    (destructuring-bind (int dot digits exp) result
+      (declare (ignore dot))
+      (let* ((frac (map 'string #'identity digits))
+             (frac-val (if (> (length frac) 0)
+                           (/ (parse-integer frac)
+                              (expt 10 (length frac)))
+                           0))
+             (base (+ int frac-val))
+             (exponent (if exp exp 0)))
+        (float (* base (expt 10 exponent)) 1.0d0)))))
 
 (defrule number
     (or float-body integer-part)
@@ -259,9 +260,11 @@
    START and END are optional bounds into TEXT."
   (let ((text-end (or end (length text))))
     (handler-case
-        (let ((ast (esrap:parse 'source-file text
-                                :start start
-                                :end text-end)))
+        (let ((ast (let ((*standard-output* (make-broadcast-stream))
+                         (*error-output* (make-broadcast-stream)))
+                     (esrap:parse 'source-file text
+                                  :start start
+                                  :end text-end))))
           ;; Check if parse consumed all input
           (let ((consumed-end (or (getf ast :end) start)))
             (if (< consumed-end text-end)
@@ -345,7 +348,9 @@
    Returns (values node new-pos) or (values nil skip-pos) on failure."
   (let ((remaining (subseq text pos end)))
     (handler-case
-        (let ((node (esrap:parse 'form remaining)))
+        (let ((node (let ((*standard-output* (make-broadcast-stream))
+                          (*error-output* (make-broadcast-stream)))
+                      (esrap:parse 'form remaining))))
           (let ((form-end (+ pos (or (getf node :end) (length remaining)))))
             (values (offset-node node pos) (skip-whitespace text form-end end))))
       (esrap:esrap-parse-error (c)

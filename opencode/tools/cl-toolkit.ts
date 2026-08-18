@@ -300,13 +300,20 @@ export default tool({
     try {
       const { stdout, stderr, exitCode } = runClToolkit(cmdArgs, code)
 
-      // If cl-toolkit failed, return the error
+      // If cl-toolkit failed, return the error as structured JSON
       if (exitCode !== 0) {
-        return {
-          title: `cl-toolkit ${command} (failed)`,
-          output: stderr || stdout || "Unknown error",
-          metadata: { diagnostics: {} },
-        }
+        const rawError = stderr || stdout || "Unknown error"
+        // Sanitize: strip control chars, collapse whitespace, truncate
+        const sanitized = rawError
+          .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 2000)
+        return JSON.stringify({
+          success: false,
+          error: sanitized,
+          _summary: `${command} failed`,
+        })
       }
 
       // When --write is used with modification commands, CLI returns unified diff directly
@@ -333,6 +340,42 @@ export default tool({
           }
         }
         // "No changes made."
+        return stdout
+      }
+
+      // Check if output is JSON before parsing (modification commands without --write return plain text)
+      const isJson = stdout.trimStart().startsWith("{") || stdout.trimStart().startsWith("[")
+      if (!isJson) {
+        // Plain text output from modification command without --write
+        if (absolutePath && ["delete-form", "insert-form", "append-form", "replace-form", "move-form", "insert"].includes(command)) {
+          let diff = ""
+          if (originalSource) {
+            diff = generateDiff(originalSource, stdout, absolutePath)
+          }
+          if (diff) {
+            const additions = (diff.match(/^\+/gm) || []).length
+            const deletions = (diff.match(/^-/gm) || []).length
+            return {
+              title: `cl-toolkit ${command} ${path.basename(absolutePath)}`,
+              output: diff,
+              metadata: {
+                diff,
+                filediff: {
+                  file: absolutePath,
+                  patch: diff,
+                  additions,
+                  deletions,
+                },
+                diagnostics: {},
+              },
+            }
+          }
+          return JSON.stringify({
+            success: true,
+            source: stdout,
+            _summary: `${command} command completed (no changes)`,
+          })
+        }
         return stdout
       }
 

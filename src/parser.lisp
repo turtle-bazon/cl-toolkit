@@ -222,6 +222,22 @@
       (error "Index ~a out of range (0-~a)" index (1- (length forms))))
     (delete-node-from-text text (nth index forms))))
 
+(defun replace-top-level-at (text index new-code &key recovery)
+  "Replace the top-level form at INDEX (0-based) with NEW-CODE in TEXT.
+   When RECOVERY is T, use error recovery parser.
+   Returns the modified source string."
+  (let* ((ast (parse-for-edit text recovery))
+         (forms (list-top-level ast)))
+    (when (or (< index 0) (>= index (length forms)))
+      (error "Index ~a out of range (0-~a)" index (1- (length forms))))
+    (let ((node (nth index forms)))
+      (let ((start (node-start node))
+            (end (node-end node)))
+        (concatenate 'string
+                     (subseq text 0 start)
+                     new-code
+                     (subseq text end))))))
+
 (defun insert-form-at (text line col new-code &key recovery)
   "Insert NEW-CODE before the form at LINE, COL (0-indexed) in TEXT.
    If we're inside a symbol, finds the containing list.

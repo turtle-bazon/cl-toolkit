@@ -189,6 +189,45 @@ echo '(cond
 - Cannot reorder elements within a list (e.g., let bindings). Use `replace-form` instead
 - Moves always insert **after** the destination. To move before a form, point to the preceding form
 
+### Replace-Form Behavior
+
+`replace-form` replaces the **innermost form** at the given position with new code.
+
+```bash
+# Replace a single form
+echo '(defun foo () (bar))' | cl-toolkit replace-form --line 1 --col 14 --replace '(baz)'
+# Result:
+# (defun foo () (baz))
+```
+
+**Key behaviors:**
+- **Single form matching** — matches the smallest form containing the target position
+- **Position-based** — uses line/col to find the form to replace
+- **Validation** — validates input and result by default
+
+**Limitations:**
+
+1. **Single form only** — `replace-form` replaces exactly one form at the given position. If you provide replacement code containing multiple forms, only the matched form is replaced; the rest of your replacement code is inserted in its place, but the original trailing content (closing parens, etc.) remains.
+
+   ```bash
+   # Example: trying to insert new cond clauses before the default clause
+   echo '(cond
+     ((= x 1) "one")
+     ((= x 2) "two")
+     (t stack))))' | cl-toolkit replace-form --line 4 --col 5 --replace '((string= u "MEAN") ...) (t stack))))'
+   # WRONG: The tool matches only (t stack) and replaces it, leaving extra parens
+   ```
+
+2. **Use for surgical edits** — replace-form works best for replacing a single, well-bounded form with another single form. For inserting multiple forms, use `insert-form` or `append-form` instead.
+
+3. **Large form replacement** — When replacing a large function (e.g., a `defun`), the tool may match a sub-form rather than the entire function if the coordinates point inside it. To replace an entire top-level form, use the `--index` approach or ensure coordinates point to the opening paren.
+
+**Recommended workflows:**
+
+- **Insert new clauses before an existing one:** Use `insert-form` to add before the target, not `replace-form`
+- **Replace an entire function:** Point to the first line/column of the `defun`, or use `delete-form` + `insert-form`
+- **Modify a single expression:** Use `replace-form` on the specific form
+
 ## Output Behavior
 
 - **Read-only commands** (parse, validate, balance, etc.) output JSON to stdout
@@ -201,6 +240,8 @@ echo '(cond
 All modification commands validate both input and result by default:
 - **Input validation**: Checks that the new code is valid Lisp before performing the operation
 - **Result validation**: Checks that the modified source is valid after the operation
+
+**Note:** The PEG parser used for validation is stricter than the SBCL reader in some cases. Code containing `(quote ...)` with backquoted lists, reader macros, or certain special forms may fail validation even though SBCL can read it. Use `--no-validate-input` to skip input validation when this occurs.
 
 Use `--no-validate-input` and/or `--no-validate-result` to skip specific validations:
 

@@ -1,5 +1,7 @@
 # Build artifacts
 lisp/build/
+build/
+calculator
 *.fasl
 *.dx64fsl
 *.lx64fsl
