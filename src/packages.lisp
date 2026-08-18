@@ -17,6 +17,7 @@
    #:node-atom-p
    #:node-error-p
    #:node-form-count
+   #:node-form-name
    #:offset-to-line-col
    #:offset-to-line-col-inverse
    #:node-to-json

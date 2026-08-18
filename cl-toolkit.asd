@@ -23,3 +23,11 @@
   :build-operation program-op
   :build-pathname "cl-toolkit"
   :entry-point "cl-toolkit:cl-toolkit-main")
+
+(defsystem #:cl-toolkit/tests
+  :description "cl-toolkit tests"
+  :depends-on (#:cl-toolkit #:fiveam)
+  :serial t
+  :components ((:module "test"
+                :serial t
+                :components ((:file "tests")))))

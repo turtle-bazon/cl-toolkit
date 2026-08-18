@@ -287,26 +287,41 @@
 ;;; ============================================================
 
 (defun top-level/handler (cmd)
-  (let* ((text (read-input cmd))
+  (let* ((names (clingon:getopt cmd :names))
+         (text (read-input cmd))
          (ast (cl-toolkit-grammar::parse-lisp-source text))
          (forms (list-top-level ast)))
-    (format *standard-output* "[")
-    (loop for form in forms
-          for i from 0
-          do (unless (zerop i) (format *standard-output* ","))
-             (cl-toolkit-ast::node-to-json form *standard-output*))
-    (format *standard-output* "]~%")))
+    (if names
+        ;; Concise name listing with indices
+        (loop for form in forms
+              for i from 0
+              do (multiple-value-bind (line col)
+                     (cl-toolkit-ast:offset-to-line-col text (cl-toolkit-ast:node-start form))
+                   (let ((name (cl-toolkit-ast:node-form-name form)))
+                     (format *standard-output* "~a: ~a  [line ~a, col ~a]~%"
+                             i (or name "?") (1+ line) col))))
+        ;; Existing JSON array output
+        (progn
+          (format *standard-output* "[")
+          (loop for form in forms
+                for i from 0
+                do (unless (zerop i) (format *standard-output* ","))
+                   (cl-toolkit-ast::node-to-json form *standard-output*))
+          (format *standard-output* "]~%")))))
 
 (defun top-level/command ()
   (clingon:make-command
    :name "top-level"
-   :usage "(-f FILE | --code CODE)"
-   :description "List top-level forms as JSON array"
+   :usage "(-f FILE | --code CODE) [--names]"
+   :description "List top-level forms as JSON array, or with --names show form names with indices"
    :options (list
              (clingon:make-option :string :long-name "file" :short-name #\f
                                   :description "File to list" :key :file)
              (clingon:make-option :string :long-name "code"
-                                  :description "Inline code" :key :code))
+                                  :description "Inline code" :key :code)
+             (clingon:make-option :flag :long-name "names"
+                                  :description "List form names with indices"
+                                  :key :names))
    :handler #'top-level/handler))
 
 ;;; ============================================================
@@ -706,6 +721,7 @@
   (let* ((line (clingon:getopt cmd :line))
          (col (clingon:getopt cmd :col))
          (index (clingon:getopt cmd :index))
+         (pretty (clingon:getopt cmd :pretty))
          (replace-code (clingon:getopt cmd :replace-code))
          (write (clingon:getopt cmd :write))
          (quiet (clingon:getopt cmd :quiet))
@@ -730,8 +746,21 @@
           (clingon:exit 1))))
     (handler-case
         (let ((result (if index
-                          (replace-top-level-at text index replace-code :recovery recovery)
-                          (replace-form-at text line col replace-code :recovery recovery))))
+                          (if pretty
+                              (let* ((ast (parse-for-edit text recovery))
+                                     (forms (list-top-level ast))
+                                     (node (nth index forms)))
+                                (unless node
+                                  (error "Index ~a out of range" index))
+                                (replace-form-pretty text node replace-code))
+                              (replace-top-level-at text index replace-code :recovery recovery))
+                          (if pretty
+                              (let* ((ast (parse-for-edit text recovery))
+                                     (node (find-form-at ast text line col)))
+                                (unless node
+                                  (error "No form found at line ~a, col ~a" line col))
+                                (replace-form-pretty text node replace-code))
+                              (replace-form-at text line col replace-code :recovery recovery)))))
           ;; Validate result (unless --no-validate-result)
           (when (not no-validate-result)
             (let ((result-ast (if recovery
@@ -758,11 +787,12 @@
 (defun replace-form/command ()
   (clingon:make-command
    :name "replace-form"
-   :usage "(-f FILE | --code CODE) (--line L --col C | --index N) --replace CODE"
+   :usage "(-f FILE | --code CODE) (--line L --col C | --index N) --replace CODE [--pretty]"
    :description "Replace form at position or by index with new code"
    :long-description "Replace a form at the given position or by top-level index. ~
                       Use --line/--col to replace by position, or --index to replace ~
-                      the N-th top-level form. Validates both input and result by default. ~
+                      the N-th top-level form. Use --pretty to preserve indentation. ~
+                      Validates both input and result by default. ~
                       Use --no-validate-input or --no-validate-result to skip specific validations."
    :options (list
              (clingon:make-option :string :long-name "file" :short-name #\f
@@ -777,6 +807,9 @@
                                   :description "Top-level form index (0-based)" :key :index)
               (clingon:make-option :string :long-name "replace" :short-name #\r
                                    :description "Replacement code" :required t :key :replace-code)
+             (clingon:make-option :flag :long-name "pretty"
+                                  :description "Preserve indentation of replaced form"
+                                  :key :pretty)
              (make-write-option)
              (make-quiet-option)
              (make-recovery-option)
@@ -844,6 +877,79 @@
    :handler #'move/handler))
 
 ;;; ============================================================
+;;; Batch Replace Command
+;;; ============================================================
+
+(defun batch-replace/handler (cmd)
+  (let* ((edits-json (clingon:getopt cmd :edits))
+         (write (clingon:getopt cmd :write))
+         (quiet (clingon:getopt cmd :quiet))
+         (recovery (clingon:getopt cmd :recovery))
+         (pretty (clingon:getopt cmd :pretty))
+         (file (clingon:getopt cmd :file))
+         (text (read-input cmd))
+         (original-text (when file (read-file-to-string file))))
+    (unless edits-json
+      (format *error-output* "Error: --edits is required~%")
+      (clingon:exit 1))
+    (handler-case
+        (let* ((edits-list (cl-json:decode-json-from-string edits-json))
+               (edit-plists (mapcar (lambda (e)
+                                      (let ((op-str (cdr (assoc :operation e)))
+                                            (code (cdr (assoc :code e)))
+                                            (index-val (cdr (assoc :index e)))
+                                            (line-val (cdr (assoc :line e)))
+                                            (col-val (cdr (assoc :col e))))
+                                        (list :operation (if op-str
+                                                            (intern (string-upcase op-str) :keyword)
+                                                            :replace-index)
+                                              :code code
+                                              :index index-val
+                                              :line line-val
+                                              :col col-val
+                                              :pretty pretty)))
+                                    edits-list))
+               (result (apply-batch-edits text edit-plists :recovery recovery)))
+          (if write
+              (if file
+                  (let ((diff (generate-unified-diff original-text result file)))
+                    (write-result-to-file file result quiet)
+                    (if diff
+                        (format *standard-output* "~a" diff)
+                        (format *standard-output* "No changes made.~%")))
+                  (progn
+                    (format *error-output* "Error: --write requires --file~%")
+                    (clingon:exit 1)))
+              (format *standard-output* "~a" result)))
+      (error (c)
+        (format *error-output* "Error: ~a~%" c)
+        (clingon:exit 1)))))
+
+(defun batch-replace/command ()
+  (clingon:make-command
+   :name "batch-replace"
+   :usage "(-f FILE | --code CODE) --edits JSON [--pretty]"
+   :description "Apply multiple edits in one command"
+   :long-description "Apply a batch of edits from a JSON array. Each edit specifies ~
+                      an :operation (:replace-index, :replace-position, :delete-index, ~
+                      or :insert-after-index), :code, and position (:index or :line/:col). ~
+                      Edits are applied sequentially."
+   :options (list
+             (clingon:make-option :string :long-name "file" :short-name #\f
+                                  :description "File to edit" :key :file)
+             (clingon:make-option :string :long-name "code"
+                                  :description "Inline code" :key :code)
+             (clingon:make-option :string :long-name "edits" :short-name #\e
+                                  :description "JSON array of edits" :required t :key :edits)
+             (clingon:make-option :flag :long-name "pretty"
+                                  :description "Preserve indentation for all replacements"
+                                  :key :pretty)
+             (make-write-option)
+             (make-quiet-option)
+             (make-recovery-option))
+   :handler #'batch-replace/handler))
+
+;;; ============================================================
 ;;; Help / Version Subcommands
 ;;; ============================================================
 
@@ -895,8 +1001,9 @@
                    (delete-form/command)
                    (insert-form/command)
                    (append-form/command)
-                   (replace-form/command)
-                   (insert-at/command)
+                    (replace-form/command)
+                    (batch-replace/command)
+                    (insert-at/command)
                    (move-form/command)
                    (help/command)
                    (version/command))))

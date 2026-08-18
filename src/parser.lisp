@@ -238,6 +238,127 @@
                      new-code
                      (subseq text end))))))
 
+;;; ============================================================
+;;; Indentation Helpers (for --pretty)
+;;; ============================================================
+
+(defun detect-form-indentation (text node)
+  "Detect the leading indentation of NODE in TEXT.
+   Returns the number of leading spaces."
+  (let* ((start (node-start node))
+         (line-start (let ((i start))
+                       (loop while (and (> i 0)
+                                        (char/= (char text (1- i)) #\Newline))
+                             do (decf i))
+                       i)))
+    ;; Count leading spaces
+    (let ((indent 0))
+      (loop for i from line-start below start
+            when (char= (char text i) #\Space)
+              do (incf indent)
+            else do (return))
+      indent)))
+
+(defun indent-code-by (code additional-indent)
+  "Add ADDITIONAL-INDENT spaces to every line of CODE."
+  (if (<= additional-indent 0)
+      code
+      (let ((prefix (make-string additional-indent :initial-element #\Space)))
+        (with-output-to-string (out)
+          (loop for line-start = 0
+                then (if (< line-end (length code))
+                         (1+ line-end)
+                         nil)
+                while line-start
+                for line-end = (or (position #\Newline code :start line-start)
+                                   (length code))
+                do (write-string prefix out)
+                   (write-string (subseq code line-start line-end) out)
+                   (when (< line-end (length code))
+                     (write-char #\Newline out)))))))
+
+(defun replace-form-pretty (text node new-code)
+  "Replace NODE with NEW-CODE, preserving original indentation.
+   Detects the indentation of the original form and applies it to
+   the new code's first line and adjusts subsequent lines relative to that."
+  (let* ((start (node-start node))
+         (end (node-end node))
+         (indent (detect-form-indentation text node))
+         (indented-code (indent-code-by new-code indent)))
+    (concatenate 'string
+                 (subseq text 0 start)
+                 indented-code
+                 (subseq text end))))
+
+;;; ============================================================
+;;; Batch Operations
+;;; ============================================================
+
+(defun apply-single-edit (text edit &key recovery)
+  "Apply a single EDIT plist to TEXT.
+   EDIT is a plist with :operation, :code, and either :index or :line/:col.
+   Returns the modified text."
+  (let ((op (getf edit :operation))
+        (code (getf edit :code))
+        (index (getf edit :index))
+        (line (getf edit :line))
+        (col (getf edit :col))
+        (pretty (getf edit :pretty)))
+    (cond
+      ((eq op :replace-index)
+       (let* ((ast (parse-for-edit text recovery))
+              (forms (list-top-level ast)))
+         (when (or (< index 0) (>= index (length forms)))
+           (error "Index ~a out of range (0-~a)" index (1- (length forms))))
+         (let ((node (nth index forms)))
+           (if pretty
+               (replace-form-pretty text node code)
+               (let ((start (node-start node))
+                     (end (node-end node)))
+                 (concatenate 'string
+                              (subseq text 0 start)
+                              code
+                              (subseq text end)))))))
+      ((eq op :replace-position)
+       (let* ((ast (parse-for-edit text recovery))
+              (node (find-form-at ast text line col)))
+         (unless node
+           (error "No form found at line ~a, col ~a" line col))
+         (if pretty
+             (replace-form-pretty text node code)
+             (let ((start (node-start node))
+                   (end (node-end node)))
+               (concatenate 'string
+                            (subseq text 0 start)
+                            code
+                            (subseq text end))))))
+      ((eq op :delete-index)
+       (let* ((ast (parse-for-edit text recovery))
+              (forms (list-top-level ast)))
+         (when (or (< index 0) (>= index (length forms)))
+           (error "Index ~a out of range (0-~a)" index (1- (length forms))))
+         (delete-node-from-text text (nth index forms))))
+      ((eq op :insert-after-index)
+       (let* ((ast (parse-for-edit text recovery))
+              (forms (list-top-level ast)))
+         (when (or (< index 0) (>= index (length forms)))
+           (error "Index ~a out of range (0-~a)" index (1- (length forms))))
+         (let ((node (nth index forms)))
+           (let ((end (node-end node)))
+             (concatenate 'string
+                          (subseq text 0 end)
+                          code
+                          (subseq text end))))))
+      (t (error "Unknown operation: ~a" op)))))
+
+(defun apply-batch-edits (text edits &key recovery)
+  "Apply a list of EDIT plists sequentially to TEXT.
+   Returns the final modified text."
+  (reduce (lambda (current-text edit)
+            (apply-single-edit current-text edit :recovery recovery))
+          edits
+          :initial-value text))
+
 (defun insert-form-at (text line col new-code &key recovery)
   "Insert NEW-CODE before the form at LINE, COL (0-indexed) in TEXT.
    If we're inside a symbol, finds the containing list.

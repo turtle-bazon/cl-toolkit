@@ -77,6 +77,7 @@ cl-toolkit find --code "(defun foo () (bar))" --line 1 --col 2
 
 # List top-level forms
 cl-toolkit top-level --file myfile.lisp
+cl-toolkit top-level --file myfile.lisp --names  # Show names with indices
 echo "(defun foo () (bar))" | cl-toolkit top-level
 
 # Delete form
@@ -95,6 +96,12 @@ cl-toolkit insert --file myfile.lisp --line 5 --col 10 --insert " ; comment"
 
 # Replace form
 cl-toolkit replace-form --file myfile.lisp --line 5 --col 2 --replace "(replaced-form)"
+cl-toolkit replace-form --file myfile.lisp --index 0 --replace "(replaced)" --pretty  # Preserve indentation
+cl-toolkit replace-form --file myfile.lisp --index 0 --replace "(replaced)" --write  # In-place
+
+# Batch operations (multiple edits at once)
+cl-toolkit batch-replace --file myfile.lisp --edits '[{"operation":"delete-index","index":1}]'
+cl-toolkit batch-replace --file myfile.lisp --edits '[{"operation":"replace-index","index":0,"code":"(new-form)"}]' --write
 
 # Move form
 cl-toolkit move-form --file myfile.lisp --from-line 5 --from-col 2 --to-line 10 --to-col 2
