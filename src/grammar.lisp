@@ -258,13 +258,13 @@
 (defun parse-lisp-source (text &optional (start 0) end)
   "Parse TEXT as Lisp source code. Returns AST root node.
    START and END are optional bounds into TEXT."
-  (let ((text-end (or end (length text))))
+  (let ((text-end (or end (length text)))
+        (*standard-output* (make-broadcast-stream))
+        (*error-output* (make-broadcast-stream)))
     (handler-case
-        (let ((ast (let ((*standard-output* (make-broadcast-stream))
-                         (*error-output* (make-broadcast-stream)))
-                     (esrap:parse 'source-file text
-                                  :start start
-                                  :end text-end))))
+        (let ((ast (esrap:parse 'source-file text
+                                :start start
+                                :end text-end)))
           ;; Check if parse consumed all input
           (let ((consumed-end (or (getf ast :end) start)))
             (if (< consumed-end text-end)
@@ -346,11 +346,11 @@
 (defun try-parse-form-at (text pos end)
   "Try to parse a single form at POS.
    Returns (values node new-pos) or (values nil skip-pos) on failure."
-  (let ((remaining (subseq text pos end)))
+  (let ((remaining (subseq text pos end))
+        (*standard-output* (make-broadcast-stream))
+        (*error-output* (make-broadcast-stream)))
     (handler-case
-        (let ((node (let ((*standard-output* (make-broadcast-stream))
-                          (*error-output* (make-broadcast-stream)))
-                      (esrap:parse 'form remaining))))
+        (let ((node (esrap:parse 'form remaining)))
           (let ((form-end (+ pos (or (getf node :end) (length remaining)))))
             (values (offset-node node pos) (skip-whitespace text form-end end))))
       (esrap:esrap-parse-error (c)
