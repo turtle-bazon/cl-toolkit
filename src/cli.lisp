@@ -433,6 +433,7 @@
          (col (clingon:getopt cmd :col))
          (index (clingon:getopt cmd :index))
          (name (clingon:getopt cmd :name))
+         (end (clingon:getopt cmd :end))
          (write (clingon:getopt cmd :write))
          (preview (clingon:getopt cmd :preview))
          (quiet (clingon:getopt cmd :quiet))
@@ -444,6 +445,8 @@
     (handler-case
         (let ((result
                 (cond
+                  (end
+                   (delete-last-top-level text :recovery recovery))
                   (name
                    (let ((node (find-top-level-by-name text name :recovery recovery)))
                      (unless node
@@ -455,7 +458,7 @@
                   ((and line col)
                    (delete-form-at text line col :recovery recovery))
                   (t
-                   (format *error-output* "Error: --line/--col, --index, or --name required~%")
+                   (format *error-output* "Error: --end, --name, --index, or --line/--col required~%")
                    (clingon:exit 1)))))
           ;; Validate result (unless --no-validate-result)
           (when (and (not no-validate-result) result (> (length result) 0))
@@ -490,11 +493,12 @@
 (defun delete-form/command ()
   (clingon:make-command
    :name "delete-form"
-   :usage "(-f FILE | --code CODE) (--line L --col C | --index N | --name NAME)"
-   :description "Delete form at position, by index, or by name"
+   :usage "(-f FILE | --code CODE) (--end | --name NAME | --index N | --line L --col C)"
+   :description "Delete form at end of file, by name, by index, or by position"
    :long-description "Delete a form from the source. ~
-                      Use --line/--col to delete by position, --index to delete ~
-                      the N-th top-level form, or --name to delete by form name. ~
+                      Use --end to delete the last top-level form, --name to delete ~
+                      by form name, --index to delete the N-th top-level form, ~
+                      or --line/--col to delete by position. ~
                       Use --preview to see changes before applying. ~
                       Validates result by default; use --no-validate-result to skip."
    :options (list
@@ -510,6 +514,8 @@
                                    :description "Top-level form index (0-based)" :key :index)
               (clingon:make-option :string :long-name "name" :short-name #\n
                                    :description "Top-level form name" :key :name)
+              (clingon:make-option :flag :long-name "end"
+                                   :description "Delete the last top-level form" :key :end)
               (make-write-option)
               (make-preview-option)
               (make-quiet-option)
@@ -804,6 +810,7 @@
          (col (clingon:getopt cmd :col))
          (index (clingon:getopt cmd :index))
          (name (clingon:getopt cmd :name))
+         (end (clingon:getopt cmd :end))
          (pretty (clingon:getopt cmd :pretty))
          (replace-code (clingon:getopt cmd :replace-code))
          (write (clingon:getopt cmd :write))
@@ -818,8 +825,8 @@
     (unless replace-code
       (format *error-output* "Error: --replace is required~%")
       (clingon:exit 1))
-    (unless (or (and line col) index name)
-      (format *error-output* "Error: --line/--col, --index, or --name required~%")
+    (unless (or (and line col) index name end)
+      (format *error-output* "Error: --end, --name, --index, or --line/--col required~%")
       (clingon:exit 1))
     ;; Validate input code before operation (unless --no-validate-input)
     (when (not no-validate-input)
@@ -830,6 +837,15 @@
           (clingon:exit 1))))
     (handler-case
         (let ((result (cond
+                        (end
+                         (if pretty
+                             (let* ((ast (parse-for-edit text recovery))
+                                    (forms (list-top-level ast))
+                                    (node (first (last forms))))
+                               (unless node
+                                 (error "No top-level forms found"))
+                               (replace-form-pretty text node replace-code))
+                             (replace-last-top-level text replace-code :recovery recovery)))
                         (name
                          (let ((node (find-top-level-by-name text name :recovery recovery)))
                            (unless node
@@ -892,11 +908,10 @@
 (defun replace-form/command ()
   (clingon:make-command
    :name "replace-form"
-   :usage "(-f FILE | --code CODE) (--line L --col C | --index N | --name NAME) --replace CODE [--pretty]"
-   :description "Replace form by position, index, or name with new code"
-   :long-description "Replace a form at the given position, by top-level index, or by name. ~
-                      Use --line/--col to replace by position, --index to replace ~
-                      the N-th top-level form, or --name to replace by form name. ~
+   :usage "(-f FILE | --code CODE) (--end | --name NAME | --index N | --line L --col C) --replace CODE [--pretty]"
+   :description "Replace form at end of file, by name, by index, or by position"
+   :long-description "Replace a form at the given position, by top-level index, by name, ~
+                      or the last top-level form. ~
                       Use --pretty to preserve indentation. ~
                       Use --preview to see changes before applying. ~
                       Validates both input and result by default. ~
@@ -914,6 +929,8 @@
                                   :description "Top-level form index (0-based)" :key :index)
              (clingon:make-option :string :long-name "name" :short-name #\n
                                   :description "Top-level form name" :key :name)
+             (clingon:make-option :flag :long-name "end"
+                                  :description "Replace the last top-level form" :key :end)
               (clingon:make-option :string :long-name "replace" :short-name #\r
                                    :description "Replacement code" :required t :key :replace-code)
              (clingon:make-option :flag :long-name "pretty"

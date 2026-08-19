@@ -190,6 +190,18 @@
       (cl-toolkit-grammar::parse-with-recovery text)
       (cl-toolkit-grammar::parse-lisp-source text)))
 
+(defun find-top-level-by-name (text name &key recovery)
+  "Find the first top-level form whose name matches NAME.
+   NAME is compared case-insensitively against the first symbol in each form.
+   Returns the node, or NIL if not found."
+  (let* ((ast (parse-for-edit text recovery))
+         (forms (list-top-level ast)))
+    (loop for form in forms
+          for form-name = (node-form-name form)
+          when (and form-name
+                    (string-equal form-name name))
+            return form)))
+
 (defun delete-node-from-text (text node)
   "Delete NODE's source range from TEXT. Handles whitespace cleanup."
   (let ((start (node-start node))
@@ -222,8 +234,25 @@
       (error "Index ~a out of range (0-~a)" index (1- (length forms))))
     (delete-node-from-text text (nth index forms))))
 
+(defun delete-last-top-level (text &key recovery)
+  "Delete the last top-level form from TEXT.
+   Returns the modified source string."
+  (let* ((ast (parse-for-edit text recovery))
+         (forms (list-top-level ast)))
+    (when (null forms)
+      (error "No top-level forms found"))
+    (delete-node-from-text text (first (last forms)))))
+
+(defun parse-multi-forms (text &key recovery)
+  "Parse TEXT which may contain multiple top-level forms.
+   Returns a list of (start end) pairs for each form."
+  (let* ((ast (parse-for-edit text recovery))
+         (forms (list-top-level ast)))
+    (mapcar (lambda (f) (list (node-start f) (node-end f))) forms)))
+
 (defun replace-top-level-at (text index new-code &key recovery)
   "Replace the top-level form at INDEX (0-based) with NEW-CODE in TEXT.
+   NEW-CODE may contain multiple top-level forms.
    When RECOVERY is T, use error recovery parser.
    Returns the modified source string."
   (let* ((ast (parse-for-edit text recovery))
@@ -231,6 +260,21 @@
     (when (or (< index 0) (>= index (length forms)))
       (error "Index ~a out of range (0-~a)" index (1- (length forms))))
     (let ((node (nth index forms)))
+      (let ((start (node-start node))
+            (end (node-end node)))
+        (concatenate 'string
+                     (subseq text 0 start)
+                     new-code
+                     (subseq text end))))))
+
+(defun replace-last-top-level (text new-code &key recovery)
+  "Replace the last top-level form in TEXT with NEW-CODE.
+   Returns the modified source string."
+  (let* ((ast (parse-for-edit text recovery))
+         (forms (list-top-level ast)))
+    (when (null forms)
+      (error "No top-level forms found"))
+    (let ((node (first (last forms))))
       (let ((start (node-start node))
             (end (node-end node)))
         (concatenate 'string
