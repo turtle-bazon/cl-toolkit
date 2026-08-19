@@ -92,6 +92,8 @@ cl-toolkit insert-form --file myfile.lisp --line 5 --col 2 --insert "(new-form)"
 
 # Insert code after a form
 cl-toolkit append-form --file myfile.lisp --line 5 --col 2 --insert "(new-form)"
+cl-toolkit append-form --file myfile.lisp --end --insert "(new-form)"  # At end of file
+cl-toolkit append-form --file myfile.lisp --name foo --insert "(new-form)"  # After named form
 
 # Insert text at exact position
 cl-toolkit insert --file myfile.lisp --line 5 --col 10 --insert " ; comment"
