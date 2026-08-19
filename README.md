@@ -254,23 +254,7 @@ All modification commands validate both input and result by default:
 - **Input validation**: Checks that the new code is valid Lisp before performing the operation
 - **Result validation**: Checks that the modified source is valid after the operation
 
-**Note:** The PEG parser used for validation is stricter than the SBCL reader in some cases. Code containing `(quote ...)` with backquoted lists, reader macros, or certain special forms may fail validation even though SBCL can read it. Use `--no-validate-input` to skip input validation when this occurs.
-
-Use `--no-validate-input` and/or `--no-validate-result` to skip specific validations:
-
-```bash
-# Skip input validation only
-cl-toolkit replace-form --file myfile.lisp --line 5 --col 2 \
-  --replace "(unclosed" --no-validate-input
-
-# Skip result validation only
-cl-toolkit replace-form --file myfile.lisp --line 5 --col 2 \
-  --replace "(unclosed" --no-validate-result
-
-# Skip all validation (use with caution)
-cl-toolkit replace-form --file myfile.lisp --line 5 --col 2 \
-  --replace "(unclosed" --no-validate-input --no-validate-result
-```
+**Note:** The PEG parser handles standard Lisp syntax including backquote, reader macros, and special forms. If you encounter a validation failure, check that your code has balanced parentheses and correct syntax. Use `--no-validate-input` or `--no-validate-result` only as a last resort when you're certain the code is valid but the parser rejects it.
 
 ## Insert Behavior
 
