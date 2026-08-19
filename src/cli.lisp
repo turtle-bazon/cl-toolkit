@@ -689,18 +689,23 @@
 (defun append/handler (cmd)
   (let* ((line (clingon:getopt cmd :line))
          (col (clingon:getopt cmd :col))
+         (name (clingon:getopt cmd :name))
+         (end (clingon:getopt cmd :end))
          (insert-code (clingon:getopt cmd :insert-code))
-          (write (clingon:getopt cmd :write))
-          (preview (clingon:getopt cmd :preview))
-          (quiet (clingon:getopt cmd :quiet))
-          (recovery (clingon:getopt cmd :recovery))
-          (no-validate-input (clingon:getopt cmd :no-validate-input))
-          (no-validate-result (clingon:getopt cmd :no-validate-result))
-          (file (clingon:getopt cmd :file))
-          (text (read-input cmd))
-          (original-text (when file (read-file-to-string file))))
-    (unless (and line col insert-code)
-      (format *error-output* "Error: --line, --col, and --insert are required~%")
+         (write (clingon:getopt cmd :write))
+         (preview (clingon:getopt cmd :preview))
+         (quiet (clingon:getopt cmd :quiet))
+         (recovery (clingon:getopt cmd :recovery))
+         (no-validate-input (clingon:getopt cmd :no-validate-input))
+         (no-validate-result (clingon:getopt cmd :no-validate-result))
+         (file (clingon:getopt cmd :file))
+         (text (read-input cmd))
+         (original-text (when file (read-file-to-string file))))
+    (unless insert-code
+      (format *error-output* "Error: --insert is required~%")
+      (clingon:exit 1))
+    (when (and (not end) (not name) (not (and line col)))
+      (format *error-output* "Error: --end, --name, or --line/--col required~%")
       (clingon:exit 1))
     ;; Validate input code before operation (unless --no-validate-input)
     (when (not no-validate-input)
@@ -710,7 +715,21 @@
                   (node-value input-ast))
           (clingon:exit 1))))
     (handler-case
-        (let ((result (append-form-at text line col insert-code :recovery recovery)))
+        (let ((result (cond
+                        (end
+                         (insert-form-end text insert-code))
+                        (name
+                         (let ((node (find-top-level-by-name text name :recovery recovery)))
+                           (unless node
+                             (error "No top-level form named '~a'" name))
+                           (let ((node-end (node-end node)))
+                             (concatenate 'string
+                                          (subseq text 0 node-end)
+                                          (string #\Newline)
+                                          insert-code
+                                          (subseq text node-end)))))
+                        (t
+                         (append-form-at text line col insert-code :recovery recovery)))))
           ;; Validate result (unless --no-validate-result)
           (when (not no-validate-result)
             (let ((result-ast (if recovery
@@ -744,10 +763,11 @@
 (defun append-form/command ()
   (clingon:make-command
    :name "append-form"
-   :usage "(-f FILE | --code CODE) --insert CODE --line L --col C"
-   :description "Insert code after a form"
+   :usage "(-f FILE | --code CODE) --insert CODE (--end | --name NAME | --line L --col C)"
+   :description "Insert code after a form, at end of file, or after a named form"
    :long-description "Insert code after the form at the given position. ~
-                      Unlike insert-form which inserts before, this appends after."
+                      Use --end to append at end of file. ~
+                      Use --name to append after a specific top-level form by name."
    :options (list
               (clingon:make-option :string :long-name "file" :short-name #\f
                                    :description "File to edit" :key :file)
@@ -757,8 +777,12 @@
                                    :description "Line number" :key :line)
               (clingon:make-option :integer :long-name "col" :short-name #\c
                                    :description "Column number" :key :col)
+              (clingon:make-option :string :long-name "name" :short-name #\n
+                                   :description "Append after named form" :key :name)
+              (clingon:make-option :flag :long-name "end"
+                                   :description "Append at end of file" :key :end)
                (clingon:make-option :string :long-name "insert" :short-name #\i
-                                    :description "Code to insert" :key :insert-code)
+                                    :description "Code to insert" :required t :key :insert-code)
                (make-write-option)
               (make-preview-option)
               (make-quiet-option)
