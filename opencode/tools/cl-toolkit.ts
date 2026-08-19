@@ -126,7 +126,7 @@ export default tool({
   description: "Parse, validate, and edit Common Lisp code using cl-toolkit (PEG parser with error recovery)",
   args: {
     command: tool.schema
-      .enum(["parse", "validate", "find", "extract", "top-level", "delete-form", "insert-form", "append-form", "replace-form", "move-form", "insert", "balance", "format"])
+      .enum(["parse", "validate", "find", "extract", "top-level", "delete-form", "insert-form", "append-form", "replace-form", "move-form", "insert", "balance", "format", "batch-replace"])
       .describe("Command to execute"),
     code: tool.schema.string().optional().describe("Inline Lisp code to parse/insert/replace"),
     filePath: tool.schema.string().optional().describe("Path to .lisp file"),
@@ -143,9 +143,14 @@ export default tool({
     line2: tool.schema.number().optional().describe("End line (extract/move command)"),
     col2: tool.schema.number().optional().describe("End column (extract/move command)"),
     indent: tool.schema.string().optional().describe("Indent string for format command (default: 2 spaces)"),
+    end: tool.schema.boolean().optional().describe("Target end of file (append-form, delete-form, replace-form)"),
+    name: tool.schema.string().optional().describe("Target form by defined name (append-form, delete-form, replace-form)"),
+    preview: tool.schema.boolean().optional().describe("Show diff without writing (all edit commands)"),
+    pretty: tool.schema.boolean().optional().describe("Preserve indentation (replace-form)"),
+    edits: tool.schema.string().optional().describe("JSON array of edits (batch-replace command)"),
   },
   async execute(args, context) {
-    const { command, code, filePath, recovery, write, validate, noValidateInput, noValidateResult, index, line, col, line1, col1, line2, col2, indent } = args
+    const { command, code, filePath, recovery, write, validate, noValidateInput, noValidateResult, index, line, col, line1, col1, line2, col2, indent, end, name, preview, pretty, edits } = args
 
     // Resolve file path if provided
     let absolutePath: string | undefined
@@ -156,7 +161,7 @@ export default tool({
 
     // Read original file for diff generation (modification commands only)
     let originalSource: string | undefined
-    if (absolutePath && ["delete", "insert", "replace", "move", "format"].includes(command)) {
+    if (absolutePath && ["delete-form", "insert-form", "append-form", "replace-form", "move-form", "insert", "format", "batch-replace"].includes(command)) {
       try {
         originalSource = readFileSync(absolutePath, "utf-8")
       } catch (e) {
@@ -210,12 +215,17 @@ export default tool({
       if (recovery) cmdArgs.push("--recovery")
       if (noValidateInput) cmdArgs.push("--no-validate-input")
       if (noValidateResult) cmdArgs.push("--no-validate-result")
-      if (index !== undefined) {
+      if (preview) cmdArgs.push("--preview")
+      if (end) {
+        cmdArgs.push("--file", absolutePath, "--end")
+      } else if (name) {
+        cmdArgs.push("--file", absolutePath, "--name", name)
+      } else if (index !== undefined) {
         cmdArgs.push("--file", absolutePath, "--index", String(index))
       } else if (line !== undefined && col !== undefined) {
         cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col))
       } else {
-        return JSON.stringify({ error: "delete-form command requires line/col or index" })
+        return JSON.stringify({ error: "delete-form command requires end, name, index, or line/col" })
       }
     } else if (command === "insert-form") {
       if (!absolutePath) {
@@ -226,6 +236,7 @@ export default tool({
       if (recovery) cmdArgs.push("--recovery")
       if (noValidateInput) cmdArgs.push("--no-validate-input")
       if (noValidateResult) cmdArgs.push("--no-validate-result")
+      if (preview) cmdArgs.push("--preview")
       if (line !== undefined && col !== undefined && code) {
         cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--insert", code)
       } else {
@@ -235,26 +246,49 @@ export default tool({
       if (!absolutePath) {
         return JSON.stringify({ error: "append-form command requires filePath" })
       }
+      if (!code) {
+        return JSON.stringify({ error: "append-form command requires code" })
+      }
       if (write) cmdArgs.push("--write")
       if (write) cmdArgs.push("--quiet")
       if (recovery) cmdArgs.push("--recovery")
       if (noValidateInput) cmdArgs.push("--no-validate-input")
       if (noValidateResult) cmdArgs.push("--no-validate-result")
-      if (line !== undefined && col !== undefined && code) {
+      if (preview) cmdArgs.push("--preview")
+      if (end) {
+        cmdArgs.push("--file", absolutePath, "--end", "--insert", code)
+      } else if (name) {
+        cmdArgs.push("--file", absolutePath, "--name", name, "--insert", code)
+      } else if (line !== undefined && col !== undefined) {
         cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--insert", code)
       } else {
-        return JSON.stringify({ error: "append-form command requires line, col, and code" })
+        return JSON.stringify({ error: "append-form command requires end, name, or line/col" })
       }
     } else if (command === "replace-form") {
-      if (!absolutePath || line === undefined || col === undefined || !code) {
-        return JSON.stringify({ error: "replace-form command requires filePath, line, col, and code" })
+      if (!absolutePath) {
+        return JSON.stringify({ error: "replace-form command requires filePath" })
+      }
+      if (!code) {
+        return JSON.stringify({ error: "replace-form command requires code" })
       }
       if (write) cmdArgs.push("--write")
       if (write) cmdArgs.push("--quiet")
       if (recovery) cmdArgs.push("--recovery")
       if (noValidateInput) cmdArgs.push("--no-validate-input")
       if (noValidateResult) cmdArgs.push("--no-validate-result")
-      cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--replace", code)
+      if (preview) cmdArgs.push("--preview")
+      if (pretty) cmdArgs.push("--pretty")
+      if (end) {
+        cmdArgs.push("--file", absolutePath, "--end", "--replace", code)
+      } else if (name) {
+        cmdArgs.push("--file", absolutePath, "--name", name, "--replace", code)
+      } else if (line !== undefined && col !== undefined) {
+        cmdArgs.push("--file", absolutePath, "--line", String(line), "--col", String(col), "--replace", code)
+      } else if (index !== undefined) {
+        cmdArgs.push("--file", absolutePath, "--index", String(index), "--replace", code)
+      } else {
+        return JSON.stringify({ error: "replace-form command requires end, name, index, or line/col" })
+      }
     } else if (command === "insert") {
       if (!absolutePath) {
         return JSON.stringify({ error: "insert command requires filePath" })
@@ -273,7 +307,22 @@ export default tool({
       if (write) cmdArgs.push("--write")
       if (write) cmdArgs.push("--quiet")
       if (recovery) cmdArgs.push("--recovery")
+      if (preview) cmdArgs.push("--preview")
       cmdArgs.push("--file", absolutePath, "--from-line", String(line1), "--from-col", String(col1), "--to-line", String(line2), "--to-col", String(col2))
+    } else if (command === "batch-replace") {
+      if (!absolutePath) {
+        return JSON.stringify({ error: "batch-replace command requires filePath" })
+      }
+      if (!edits) {
+        return JSON.stringify({ error: "batch-replace command requires edits (JSON array)" })
+      }
+      if (write) cmdArgs.push("--write")
+      if (write) cmdArgs.push("--quiet")
+      if (recovery) cmdArgs.push("--recovery")
+      if (noValidateInput) cmdArgs.push("--no-validate-input")
+      if (noValidateResult) cmdArgs.push("--no-validate-result")
+      if (preview) cmdArgs.push("--preview")
+      cmdArgs.push("--file", absolutePath, "--edits", edits)
     } else if (command === "balance") {
       if (absolutePath) {
         cmdArgs.push("--file", absolutePath)
@@ -317,7 +366,7 @@ export default tool({
       }
 
       // When --write is used with modification commands, CLI returns unified diff directly
-      if (write && ["delete-form", "insert-form", "append-form", "replace-form", "move-form", "insert", "format"].includes(command)) {
+      if (write && ["delete-form", "insert-form", "append-form", "replace-form", "move-form", "insert", "format", "batch-replace"].includes(command)) {
         if (stdout.startsWith("---") && absolutePath) {
           // Count additions and deletions from diff
           const additions = (stdout.match(/^\+/gm) || []).length
@@ -347,7 +396,7 @@ export default tool({
       const isJson = stdout.trimStart().startsWith("{") || stdout.trimStart().startsWith("[")
       if (!isJson) {
         // Plain text output from modification command without --write
-        if (absolutePath && ["delete-form", "insert-form", "append-form", "replace-form", "move-form", "insert"].includes(command)) {
+        if (absolutePath && ["delete-form", "insert-form", "append-form", "replace-form", "move-form", "insert", "batch-replace"].includes(command)) {
           let diff = ""
           if (originalSource) {
             diff = generateDiff(originalSource, stdout, absolutePath)
