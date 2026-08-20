@@ -438,6 +438,7 @@
          (preview (clingon:getopt cmd :preview))
          (quiet (clingon:getopt cmd :quiet))
          (recovery (clingon:getopt cmd :recovery))
+         (no-validate-input (clingon:getopt cmd :no-validate-input))
          (no-validate-result (clingon:getopt cmd :no-validate-result))
          (file (clingon:getopt cmd :file))
          (text (read-input cmd))
@@ -519,10 +520,13 @@
               (make-write-option)
               (make-preview-option)
               (make-quiet-option)
-              (make-recovery-option)
-              (clingon:make-option :flag :long-name "no-validate-result"
-                                   :description "Skip result validation"
-                                   :key :no-validate-result))
+               (make-recovery-option)
+               (clingon:make-option :flag :long-name "no-validate-input"
+                                    :description "Skip input code validation"
+                                    :key :no-validate-input)
+               (clingon:make-option :flag :long-name "no-validate-result"
+                                    :description "Skip result validation"
+                                    :key :no-validate-result))
     :handler #'delete/handler))
 
 ;;; ============================================================
@@ -961,6 +965,8 @@
           (preview (clingon:getopt cmd :preview))
           (quiet (clingon:getopt cmd :quiet))
           (recovery (clingon:getopt cmd :recovery))
+          (no-validate-input (clingon:getopt cmd :no-validate-input))
+          (no-validate-result (clingon:getopt cmd :no-validate-result))
           (file (clingon:getopt cmd :file))
           (text (read-input cmd))
           (original-text (when file (read-file-to-string file))))
@@ -1009,7 +1015,13 @@
               (make-write-option)
               (make-preview-option)
               (make-quiet-option)
-              (make-recovery-option))
+              (make-recovery-option)
+              (clingon:make-option :flag :long-name "no-validate-input"
+                                   :description "Skip input code validation"
+                                   :key :no-validate-input)
+              (clingon:make-option :flag :long-name "no-validate-result"
+                                   :description "Skip result validation"
+                                   :key :no-validate-result))
    :handler #'move/handler))
 
 ;;; ============================================================
@@ -1023,6 +1035,8 @@
           (quiet (clingon:getopt cmd :quiet))
           (recovery (clingon:getopt cmd :recovery))
           (pretty (clingon:getopt cmd :pretty))
+          (no-validate-input (clingon:getopt cmd :no-validate-input))
+          (no-validate-result (clingon:getopt cmd :no-validate-result))
           (file (clingon:getopt cmd :file))
           (text (read-input cmd))
           (original-text (when file (read-file-to-string file))))
@@ -1091,7 +1105,13 @@
               (make-write-option)
               (make-preview-option)
               (make-quiet-option)
-              (make-recovery-option))
+              (make-recovery-option)
+              (clingon:make-option :flag :long-name "no-validate-input"
+                                   :description "Skip input code validation"
+                                   :key :no-validate-input)
+              (clingon:make-option :flag :long-name "no-validate-result"
+                                   :description "Skip result validation"
+                                   :key :no-validate-result))
    :handler #'batch-replace/handler))
 
 ;;; ============================================================
