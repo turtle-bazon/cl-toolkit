@@ -396,12 +396,18 @@
       (t (error "Unknown operation: ~a" op)))))
 
 (defun apply-batch-edits (text edits &key recovery)
-  "Apply a list of EDIT plists sequentially to TEXT.
+  "Apply a list of EDIT plists to TEXT.
+   Sorts index-based edits from highest to lowest to prevent index shifting.
+   Position-based edits (line/col) are applied after index edits.
    Returns the final modified text."
-  (reduce (lambda (current-text edit)
-            (apply-single-edit current-text edit :recovery recovery))
-          edits
-          :initial-value text))
+  (let* ((index-edits (remove-if-not (lambda (e) (getf e :index)) edits))
+         (position-edits (remove-if (lambda (e) (getf e :index)) edits))
+         (sorted-index (sort (copy-list index-edits) (lambda (a b)
+                                                      (> (getf a :index) (getf b :index))))))
+    (reduce (lambda (current-text edit)
+              (apply-single-edit current-text edit :recovery recovery))
+            (append sorted-index position-edits)
+            :initial-value text)))
 
 (defun insert-form-at (text line col new-code &key recovery)
   "Insert NEW-CODE before the form at LINE, COL (0-indexed) in TEXT.
