@@ -307,6 +307,8 @@ export default tool({
       if (write) cmdArgs.push("--write")
       if (write) cmdArgs.push("--quiet")
       if (recovery) cmdArgs.push("--recovery")
+      if (noValidateInput) cmdArgs.push("--no-validate-input")
+      if (noValidateResult) cmdArgs.push("--no-validate-result")
       if (preview) cmdArgs.push("--preview")
       cmdArgs.push("--file", absolutePath, "--from-line", String(line1), "--from-col", String(col1), "--to-line", String(line2), "--to-col", String(col2))
     } else if (command === "batch-replace") {
