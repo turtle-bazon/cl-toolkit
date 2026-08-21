@@ -84,10 +84,12 @@ export default tool({
     pretty: tool.schema.boolean().optional().describe("Preserve indentation (replace-form)"),
     edits: tool.schema.string().optional().describe("JSON array of edits (batch-replace command)"),
     match: tool.schema.string().optional().describe("Replace smallest subform matching this snippet (replace-form, requires name/index/end)"),
-    contains: tool.schema.string().optional().describe("Snippet to search for (find-forms command)"),
+    contains: tool.schema.string().optional().describe("Target the unique top-level form containing this snippet (delete-form/replace-form), or search (find-forms)"),
+    previewChars: tool.schema.number().optional().describe("With top-level --names style listing: append first N chars of each form"),
+    deleteMatch: tool.schema.boolean().optional().describe("With match: remove matched subform instead of replacing"),
   },
   async execute(args, context) {
-    const { command, code, filePath, recovery, write, validate, noValidateInput, noValidateResult, index, line, col, line1, col1, line2, col2, indent, end, name, preview, pretty, edits, match, contains } = args
+    const { command, code, filePath, recovery, write, validate, noValidateInput, noValidateResult, index, line, col, line1, col1, line2, col2, indent, end, name, preview, pretty, edits, match, contains, previewChars, deleteMatch } = args
 
     // Resolve file path if provided
     let absolutePath: string | undefined
@@ -130,6 +132,7 @@ export default tool({
     } else if (command === "top-level") {
       if (absolutePath) {
         cmdArgs.push("--file", absolutePath)
+        if (previewChars && previewChars > 0) cmdArgs.push("--names", "--preview-chars", String(previewChars))
       } else {
         return JSON.stringify({ error: "Provide filePath for top-level command" })
       }
@@ -147,6 +150,8 @@ export default tool({
         cmdArgs.push("--file", absolutePath, "--end")
       } else if (name) {
         cmdArgs.push("--file", absolutePath, "--name", name)
+      } else if (contains) {
+        cmdArgs.push("--file", absolutePath, "--contains", contains)
       } else if (index !== undefined) {
         cmdArgs.push("--file", absolutePath, "--index", String(index))
       } else if (line !== undefined && col !== undefined) {
@@ -206,7 +211,10 @@ export default tool({
       if (preview) cmdArgs.push("--preview")
       if (pretty) cmdArgs.push("--pretty")
       if (match) cmdArgs.push("--match", match)
-      if (end) {
+      if (deleteMatch) cmdArgs.push("--delete-match")
+      if (contains) {
+        cmdArgs.push("--file", absolutePath!, "--contains", contains, "--replace", code!)
+      } else if (end) {
         cmdArgs.push("--file", absolutePath, "--end", "--replace", code)
       } else if (name) {
         cmdArgs.push("--file", absolutePath, "--name", name, "--replace", code)

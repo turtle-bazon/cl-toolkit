@@ -3,6 +3,28 @@
 All notable changes to cl-toolkit. During 0.x, breaking changes are
 marked `BREAKING:`.
 
+## [0.2.1] - 2026-08-22
+
+### Added
+
+- Target announcement on every destructive edit — now printed even under
+  `--quiet` and includes a 60-char source preview:
+  `Replacing form 'test' [line 4, col 0] "(test process-defun ...)"`.
+  Closes the anonymous-sibling incident cluster (look-alike FiveAM tests).
+- `top-level --names --preview-chars N` — source excerpts in listings so
+  identical heads are tellable.
+- `--contains SNIPPET` targeting on replace-form/delete-form: resolves to
+  the *unique* top-level form containing the snippet; refuses ambiguity
+  with the candidate indices.
+- `replace-form --delete-match` — removes the `--match`ed subform
+  (subform deletion without whole-function rewrite).
+- `--match` miss error now notes that matching is literal source text.
+
+### Fixed
+
+- Plugin `--quiet` no longer suppresses target announcements (root cause
+  of missing announcements on index writes through the plugin).
+
 ## [0.2.0] - 2026-08-21
 
 ### BREAKING
