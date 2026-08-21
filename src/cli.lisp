@@ -96,6 +96,77 @@
         (format *standard-output* "No changes made.~%"))))
 
 ;;; ============================================================
+;;; Shared Edit Helpers
+;;; ============================================================
+
+(defun deliver-edit-result (result original-text file preview write quiet)
+  "Dispatch RESULT to preview, in-place write, or stdout.
+   PREVIEW and WRITE require FILE; exits with an error otherwise."
+  (cond
+    (preview
+     (if file
+         (preview-edit original-text result file)
+         (progn
+           (format *error-output* "Error: --preview requires --file~%")
+           (clingon:exit 1))))
+    (write
+     (if file
+         (let ((diff (generate-unified-diff original-text result file)))
+           (write-result-to-file file result quiet)
+           (if diff
+               (format *standard-output* "~a" diff)
+               (format *standard-output* "No changes made.~%")))
+         (progn
+           (format *error-output* "Error: --write requires --file~%")
+           (clingon:exit 1))))
+    (t (format *standard-output* "~a" result))))
+
+(defun validate-new-code (code &optional skip)
+  "Validate that CODE parses as Lisp unless SKIP is true.
+   Exits with an error on invalid input."
+  (when (and (not skip) code)
+    (let ((input-ast (cl-toolkit-grammar::parse-lisp-source code)))
+      (when (eq (node-type input-ast) :error)
+        (format *error-output* "Input code validation failed: ~a~%"
+                (node-value input-ast))
+        (clingon:exit 1)))))
+
+(defun validate-edited-source (result recovery &optional skip)
+  "Validate that RESULT parses as Lisp unless SKIP is true.
+   RECOVERY selects the error-recovery parser. Exits with an error on failure."
+  (when (and (not skip) result (> (length result) 0))
+    (let ((result-ast (if recovery
+                          (cl-toolkit-grammar::parse-with-recovery result)
+                          (cl-toolkit-grammar::parse-lisp-source result))))
+      (when (eq (node-type result-ast) :error)
+        (format *error-output* "Result validation failed: ~a~%"
+                (node-value result-ast))
+        (clingon:exit 1)))))
+
+(defmacro with-edit-context ((cmd &key code-key) &body body)
+  "Bind the standard edit-command options from CMD and run BODY.
+   CODE-KEY names an extra option bound to CODE (e.g. :replace-code).
+   Bound variables: line col index name end pretty code write preview quiet
+   recovery no-validate-input no-validate-result file text original-text."
+  `(let* ((line (clingon:getopt ,cmd :line))
+          (col (clingon:getopt ,cmd :col))
+          (index (clingon:getopt ,cmd :index))
+          (name (clingon:getopt ,cmd :name))
+          (end (clingon:getopt ,cmd :end))
+          (pretty (clingon:getopt ,cmd :pretty))
+          ,@(when code-key `((code (clingon:getopt ,cmd ,code-key))))
+          (write (clingon:getopt ,cmd :write))
+          (preview (clingon:getopt ,cmd :preview))
+          (quiet (clingon:getopt ,cmd :quiet))
+          (recovery (clingon:getopt ,cmd :recovery))
+          (no-validate-input (clingon:getopt ,cmd :no-validate-input))
+          (no-validate-result (clingon:getopt ,cmd :no-validate-result))
+          (file (clingon:getopt ,cmd :file))
+          (text (read-input ,cmd))
+          (original-text (when file (read-file-to-string file))))
+     ,@body))
+
+;;; ============================================================
 ;;; Shared Options
 ;;; ============================================================
 
@@ -394,17 +465,7 @@
          (text (read-input cmd))
          (original-text (when file (read-file-to-string file)))
          (formatted (format-source text :indent indent)))
-    (if write
-        (if file
-            (let ((diff (generate-unified-diff original-text formatted file)))
-              (write-result-to-file file formatted quiet)
-              (if diff
-                  (format *standard-output* "~a" diff)
-                  (format *standard-output* "No changes made.~%")))
-            (progn
-              (format *error-output* "Error: --write requires --file~%")
-              (clingon:exit 1)))
-        (format *standard-output* "~a" formatted))))
+    (deliver-edit-result formatted original-text file nil write quiet)))
 
 (defun format/command ()
   (clingon:make-command
@@ -429,20 +490,7 @@
 ;;; ============================================================
 
 (defun delete/handler (cmd)
-  (let* ((line (clingon:getopt cmd :line))
-         (col (clingon:getopt cmd :col))
-         (index (clingon:getopt cmd :index))
-         (name (clingon:getopt cmd :name))
-         (end (clingon:getopt cmd :end))
-         (write (clingon:getopt cmd :write))
-         (preview (clingon:getopt cmd :preview))
-         (quiet (clingon:getopt cmd :quiet))
-         (recovery (clingon:getopt cmd :recovery))
-         (no-validate-input (clingon:getopt cmd :no-validate-input))
-         (no-validate-result (clingon:getopt cmd :no-validate-result))
-         (file (clingon:getopt cmd :file))
-         (text (read-input cmd))
-         (original-text (when file (read-file-to-string file))))
+  (with-edit-context (cmd)
     (handler-case
         (let ((result
                 (cond
@@ -461,33 +509,8 @@
                   (t
                    (format *error-output* "Error: --end, --name, --index, or --line/--col required~%")
                    (clingon:exit 1)))))
-          ;; Validate result (unless --no-validate-result)
-          (when (and (not no-validate-result) result (> (length result) 0))
-            (let ((result-ast (if recovery
-                                  (cl-toolkit-grammar::parse-with-recovery result)
-                                  (cl-toolkit-grammar::parse-lisp-source result))))
-              (when (eq (node-type result-ast) :error)
-                (format *error-output* "Result validation failed: ~a~%"
-                        (node-value result-ast))
-                (clingon:exit 1))))
-          (cond
-            (preview
-             (if file
-                 (preview-edit original-text result file)
-                 (progn
-                   (format *error-output* "Error: --preview requires --file~%")
-                   (clingon:exit 1))))
-            (write
-             (if file
-                 (let ((diff (generate-unified-diff original-text result file)))
-                   (write-result-to-file file result quiet)
-                   (if diff
-                       (format *standard-output* "~a" diff)
-                       (format *standard-output* "No changes made.~%")))
-                 (progn
-                   (format *error-output* "Error: --write requires --file~%")
-                   (clingon:exit 1))))
-            (t (format *standard-output* "~a" result))))
+          (validate-edited-source result recovery no-validate-result)
+          (deliver-edit-result result original-text file preview write quiet))
       (error (c)
         (output-edit-result nil (format nil "~a" c))))))
 
@@ -535,16 +558,8 @@
 
 (defun insert-at/handler (cmd)
   "Insert text at cursor position without form logic."
-  (let* ((line (clingon:getopt cmd :line))
-         (col (clingon:getopt cmd :col))
-         (insert-code (clingon:getopt cmd :insert-code))
-          (write (clingon:getopt cmd :write))
-          (preview (clingon:getopt cmd :preview))
-          (quiet (clingon:getopt cmd :quiet))
-          (file (clingon:getopt cmd :file))
-          (text (read-input cmd))
-          (original-text (when file (read-file-to-string file))))
-    (unless (and line col insert-code)
+  (with-edit-context (cmd :code-key :insert-code)
+    (unless (and line col code)
       (format *error-output* "Error: --line, --col, and --insert are required~%")
       (clingon:exit 1))
     ;; Find the offset from line/col
@@ -555,26 +570,9 @@
       ;; Insert text at offset
       (let ((result (concatenate 'string
                                  (subseq text 0 offset)
-                                 insert-code
+                                 code
                                  (subseq text offset))))
-        (cond
-          (preview
-           (if file
-               (preview-edit original-text result file)
-               (progn
-                 (format *error-output* "Error: --preview requires --file~%")
-                 (clingon:exit 1))))
-          (write
-           (if file
-               (let ((diff (generate-unified-diff original-text result file)))
-                 (write-result-to-file file result quiet)
-                 (if diff
-                     (format *standard-output* "~a" diff)
-                     (format *standard-output* "No changes made.~%")))
-               (progn
-                 (format *error-output* "Error: --write requires --file~%")
-                 (clingon:exit 1))))
-          (t (format *standard-output* "~a" result)))))))
+        (deliver-edit-result result original-text file preview write quiet)))))
 
 (defun insert-at/command ()
   (clingon:make-command
@@ -604,60 +602,17 @@
 ;;; ============================================================
 
 (defun insert/handler (cmd)
-  (let* ((line (clingon:getopt cmd :line))
-         (col (clingon:getopt cmd :col))
-         (insert-code (clingon:getopt cmd :insert-code))
-          (write (clingon:getopt cmd :write))
-          (preview (clingon:getopt cmd :preview))
-          (quiet (clingon:getopt cmd :quiet))
-          (recovery (clingon:getopt cmd :recovery))
-          (no-validate-input (clingon:getopt cmd :no-validate-input))
-          (no-validate-result (clingon:getopt cmd :no-validate-result))
-          (file (clingon:getopt cmd :file))
-          (text (read-input cmd))
-          (original-text (when file (read-file-to-string file))))
-    ;; Validate input code before operation (unless --no-validate-input)
-    (when (and (not no-validate-input) insert-code)
-      (let ((input-ast (cl-toolkit-grammar::parse-lisp-source insert-code)))
-        (when (eq (node-type input-ast) :error)
-          (format *error-output* "Input code validation failed: ~a~%"
-                  (node-value input-ast))
-          (clingon:exit 1))))
+  (with-edit-context (cmd :code-key :insert-code)
+    (validate-new-code code no-validate-input)
     (handler-case
         (let ((result
-                (if (and line col insert-code)
-                    (insert-form-at text line col insert-code
-                                    :recovery recovery)
+                (if (and line col code)
+                    (insert-form-at text line col code :recovery recovery)
                     (progn
                       (format *error-output* "Error: --line/--col/--insert required~%")
                       (clingon:exit 1)))))
-          ;; Validate result (unless --no-validate-result)
-          (when (not no-validate-result)
-            (let ((result-ast (if recovery
-                                  (cl-toolkit-grammar::parse-with-recovery result)
-                                  (cl-toolkit-grammar::parse-lisp-source result))))
-              (when (eq (node-type result-ast) :error)
-                (format *error-output* "Result validation failed: ~a~%"
-                        (node-value result-ast))
-                (clingon:exit 1))))
-          (cond
-            (preview
-             (if file
-                 (preview-edit original-text result file)
-                 (progn
-                   (format *error-output* "Error: --preview requires --file~%")
-                   (clingon:exit 1))))
-            (write
-             (if file
-                 (let ((diff (generate-unified-diff original-text result file)))
-                   (write-result-to-file file result quiet)
-                   (if diff
-                       (format *standard-output* "~a" diff)
-                       (format *standard-output* "No changes made.~%")))
-                 (progn
-                   (format *error-output* "Error: --write requires --file~%")
-                   (clingon:exit 1))))
-            (t (format *standard-output* "~a" result))))
+          (validate-edited-source result recovery no-validate-result)
+          (deliver-edit-result result original-text file preview write quiet))
       (error (c)
         (output-edit-result nil (format nil "~a" c))))))
 
@@ -697,76 +652,33 @@
 ;;; ============================================================
 
 (defun append/handler (cmd)
-  (let* ((line (clingon:getopt cmd :line))
-         (col (clingon:getopt cmd :col))
-         (name (clingon:getopt cmd :name))
-         (end (clingon:getopt cmd :end))
-         (insert-code (clingon:getopt cmd :insert-code))
-         (write (clingon:getopt cmd :write))
-         (preview (clingon:getopt cmd :preview))
-         (quiet (clingon:getopt cmd :quiet))
-         (recovery (clingon:getopt cmd :recovery))
-         (no-validate-input (clingon:getopt cmd :no-validate-input))
-         (no-validate-result (clingon:getopt cmd :no-validate-result))
-         (file (clingon:getopt cmd :file))
-         (text (read-input cmd))
-         (original-text (when file (read-file-to-string file))))
-    (unless insert-code
+  (with-edit-context (cmd :code-key :insert-code)
+    (unless code
       (format *error-output* "Error: --insert is required~%")
       (clingon:exit 1))
     (when (and (not end) (not name) (not (and line col)))
       (format *error-output* "Error: --end, --name, or --line/--col required~%")
       (clingon:exit 1))
-    ;; Validate input code before operation (unless --no-validate-input)
-    (when (not no-validate-input)
-      (let ((input-ast (cl-toolkit-grammar::parse-lisp-source insert-code)))
-        (when (eq (node-type input-ast) :error)
-          (format *error-output* "Input code validation failed: ~a~%"
-                  (node-value input-ast))
-          (clingon:exit 1))))
+    (validate-new-code code no-validate-input)
     (handler-case
-        (let ((result (cond
-                        (end
-                         (insert-form-end text insert-code))
-                        (name
-                         (let ((node (find-top-level-by-name text name :recovery recovery)))
-                           (unless node
-                             (error "No top-level form named '~a'" name))
-                           (let ((node-end (node-end node)))
-                             (concatenate 'string
-                                          (subseq text 0 node-end)
-                                          (string #\Newline)
-                                          insert-code
-                                          (subseq text node-end)))))
-                        (t
-                         (append-form-at text line col insert-code :recovery recovery)))))
-          ;; Validate result (unless --no-validate-result)
-          (when (not no-validate-result)
-            (let ((result-ast (if recovery
-                                  (cl-toolkit-grammar::parse-with-recovery result)
-                                  (cl-toolkit-grammar::parse-lisp-source result))))
-              (when (eq (node-type result-ast) :error)
-                (format *error-output* "Result validation failed: ~a~%"
-                        (node-value result-ast))
-                (clingon:exit 1))))
-          (cond
-            (preview
-             (if file
-                 (preview-edit original-text result file)
-                 (progn
-                   (format *error-output* "Error: --preview requires --file~%")
-                   (clingon:exit 1))))
-            (write
-             (if file
-                 (let ((diff (generate-unified-diff original-text result file)))
-                   (write-result-to-file file result quiet)
-                   (if diff
-                       (format *standard-output* "~a" diff)
-                       (format *standard-output* "No changes made.~%")))
-                 (progn
-                   (format *error-output* "Error: --write requires --file~%")
-                   (clingon:exit 1))))
-            (t (format *standard-output* "~a" result))))
+        (let ((result
+                (cond
+                  (end
+                   (insert-form-end text code))
+                  (name
+                   (let ((node (find-top-level-by-name text name :recovery recovery)))
+                     (unless node
+                       (error "No top-level form named '~a'" name))
+                     (let ((node-end (node-end node)))
+                       (concatenate 'string
+                                    (subseq text 0 node-end)
+                                    (string #\Newline)
+                                    code
+                                    (subseq text node-end)))))
+                  (t
+                   (append-form-at text line col code :recovery recovery)))))
+          (validate-edited-source result recovery no-validate-result)
+          (deliver-edit-result result original-text file preview write quiet))
       (error (c)
         (output-edit-result nil (format nil "~a" c))))))
 
@@ -809,103 +721,54 @@
 ;;; Replace Command
 ;;; ============================================================
 
+(defun replace-node-with-code (text node code pretty)
+  "Replace NODE in TEXT with CODE, using pretty indentation when PRETTY is T."
+  (if pretty
+      (replace-form-pretty text node code)
+      (let ((start (node-start node))
+            (end (node-end node)))
+        (concatenate 'string
+                     (subseq text 0 start)
+                     code
+                     (subseq text end)))))
+
 (defun replace/handler (cmd)
-  (let* ((line (clingon:getopt cmd :line))
-         (col (clingon:getopt cmd :col))
-         (index (clingon:getopt cmd :index))
-         (name (clingon:getopt cmd :name))
-         (end (clingon:getopt cmd :end))
-         (pretty (clingon:getopt cmd :pretty))
-         (replace-code (clingon:getopt cmd :replace-code))
-         (write (clingon:getopt cmd :write))
-         (preview (clingon:getopt cmd :preview))
-         (quiet (clingon:getopt cmd :quiet))
-         (recovery (clingon:getopt cmd :recovery))
-         (no-validate-input (clingon:getopt cmd :no-validate-input))
-         (no-validate-result (clingon:getopt cmd :no-validate-result))
-         (file (clingon:getopt cmd :file))
-         (text (read-input cmd))
-         (original-text (when file (read-file-to-string file))))
-    (unless replace-code
+  (with-edit-context (cmd :code-key :replace-code)
+    (unless code
       (format *error-output* "Error: --replace is required~%")
       (clingon:exit 1))
     (unless (or (and line col) index name end)
       (format *error-output* "Error: --end, --name, --index, or --line/--col required~%")
       (clingon:exit 1))
-    ;; Validate input code before operation (unless --no-validate-input)
-    (when (not no-validate-input)
-      (let ((input-ast (cl-toolkit-grammar::parse-lisp-source replace-code)))
-        (when (eq (node-type input-ast) :error)
-          (format *error-output* "Input code validation failed: ~a~%"
-                  (node-value input-ast))
-          (clingon:exit 1))))
+    (validate-new-code code no-validate-input)
     (handler-case
-        (let ((result (cond
-                        (end
-                         (if pretty
-                             (let* ((ast (parse-for-edit text recovery))
-                                    (forms (list-top-level ast))
-                                    (node (first (last forms))))
-                               (unless node
-                                 (error "No top-level forms found"))
-                               (replace-form-pretty text node replace-code))
-                             (replace-last-top-level text replace-code :recovery recovery)))
-                        (name
-                         (let ((node (find-top-level-by-name text name :recovery recovery)))
-                           (unless node
-                             (error "No top-level form named '~a'" name))
-                           (if pretty
-                               (replace-form-pretty text node replace-code)
-                               (let ((start (node-start node))
-                                     (end (node-end node)))
-                                 (concatenate 'string
-                                              (subseq text 0 start)
-                                              replace-code
-                                              (subseq text end))))))
-                        (index
-                         (if pretty
-                             (let* ((ast (parse-for-edit text recovery))
-                                    (forms (list-top-level ast))
-                                    (node (nth index forms)))
-                               (unless node
-                                 (error "Index ~a out of range" index))
-                               (replace-form-pretty text node replace-code))
-                             (replace-top-level-at text index replace-code :recovery recovery)))
-                        (t
-                         (if pretty
-                             (let* ((ast (parse-for-edit text recovery))
-                                    (node (find-form-at ast text line col)))
-                               (unless node
-                                 (error "No form found at line ~a, col ~a" line col))
-                               (replace-form-pretty text node replace-code))
-                             (replace-form-at text line col replace-code :recovery recovery))))))
-          ;; Validate result (unless --no-validate-result)
-          (when (not no-validate-result)
-            (let ((result-ast (if recovery
-                                  (cl-toolkit-grammar::parse-with-recovery result)
-                                  (cl-toolkit-grammar::parse-lisp-source result))))
-              (when (eq (node-type result-ast) :error)
-                (format *error-output* "Result validation failed: ~a~%"
-                        (node-value result-ast))
-                (clingon:exit 1))))
-          (cond
-            (preview
-             (if file
-                 (preview-edit original-text result file)
-                 (progn
-                   (format *error-output* "Error: --preview requires --file~%")
-                   (clingon:exit 1))))
-            (write
-             (if file
-                 (let ((diff (generate-unified-diff original-text result file)))
-                   (write-result-to-file file result quiet)
-                   (if diff
-                       (format *standard-output* "~a" diff)
-                       (format *standard-output* "No changes made.~%")))
-                 (progn
-                   (format *error-output* "Error: --write requires --file~%")
-                   (clingon:exit 1))))
-            (t (format *standard-output* "~a" result))))
+        (let ((result
+                (cond
+                  (end
+                   (let* ((ast (parse-for-edit text recovery))
+                          (node (first (last (list-top-level ast)))))
+                     (unless node
+                       (error "No top-level forms found"))
+                     (replace-node-with-code text node code pretty)))
+                  (name
+                   (let ((node (find-top-level-by-name text name :recovery recovery)))
+                     (unless node
+                       (error "No top-level form named '~a'" name))
+                     (replace-node-with-code text node code pretty)))
+                  (index
+                   (let* ((ast (parse-for-edit text recovery))
+                          (node (nth index (list-top-level ast))))
+                     (unless node
+                       (error "Index ~a out of range" index))
+                     (replace-node-with-code text node code pretty)))
+                  (t
+                   (let* ((ast (parse-for-edit text recovery))
+                          (node (find-form-at ast text line col)))
+                     (unless node
+                       (error "No form found at line ~a, col ~a" line col))
+                     (replace-node-with-code text node code pretty))))))
+          (validate-edited-source result recovery no-validate-result)
+          (deliver-edit-result result original-text file preview write quiet))
       (error (c)
         (output-edit-result nil (format nil "~a" c))))))
 
@@ -957,42 +820,17 @@
 ;;; ============================================================
 
 (defun move/handler (cmd)
-  (let* ((from-line (clingon:getopt cmd :from-line))
-         (from-col (clingon:getopt cmd :from-col))
-         (to-line (clingon:getopt cmd :to-line))
-         (to-col (clingon:getopt cmd :to-col))
-          (write (clingon:getopt cmd :write))
-          (preview (clingon:getopt cmd :preview))
-          (quiet (clingon:getopt cmd :quiet))
-          (recovery (clingon:getopt cmd :recovery))
-          (no-validate-input (clingon:getopt cmd :no-validate-input))
-          (no-validate-result (clingon:getopt cmd :no-validate-result))
-          (file (clingon:getopt cmd :file))
-          (text (read-input cmd))
-          (original-text (when file (read-file-to-string file))))
-    (handler-case
-        (let ((result (move-form text from-line from-col to-line to-col
-                                 :recovery recovery)))
-          (cond
-            (preview
-             (if file
-                 (preview-edit original-text result file)
-                 (progn
-                   (format *error-output* "Error: --preview requires --file~%")
-                   (clingon:exit 1))))
-            (write
-             (if file
-                 (let ((diff (generate-unified-diff original-text result file)))
-                   (write-result-to-file file result quiet)
-                   (if diff
-                       (format *standard-output* "~a" diff)
-                       (format *standard-output* "No changes made.~%")))
-                 (progn
-                   (format *error-output* "Error: --write requires --file~%")
-                   (clingon:exit 1))))
-            (t (format *standard-output* "~a" result))))
-      (error (c)
-        (output-edit-result nil (format nil "~a" c))))))
+  (with-edit-context (cmd)
+    (let ((from-line (clingon:getopt cmd :from-line))
+          (from-col (clingon:getopt cmd :from-col))
+          (to-line (clingon:getopt cmd :to-line))
+          (to-col (clingon:getopt cmd :to-col)))
+      (handler-case
+          (let ((result (move-form text from-line from-col to-line to-col
+                                   :recovery recovery)))
+            (deliver-edit-result result original-text file preview write quiet))
+        (error (c)
+          (output-edit-result nil (format nil "~a" c)))))))
 
 (defun move-form/command ()
   (clingon:make-command
@@ -1029,59 +867,34 @@
 ;;; ============================================================
 
 (defun batch-replace/handler (cmd)
-  (let* ((edits-json (clingon:getopt cmd :edits))
-          (write (clingon:getopt cmd :write))
-          (preview (clingon:getopt cmd :preview))
-          (quiet (clingon:getopt cmd :quiet))
-          (recovery (clingon:getopt cmd :recovery))
-          (pretty (clingon:getopt cmd :pretty))
-          (no-validate-input (clingon:getopt cmd :no-validate-input))
-          (no-validate-result (clingon:getopt cmd :no-validate-result))
-          (file (clingon:getopt cmd :file))
-          (text (read-input cmd))
-          (original-text (when file (read-file-to-string file))))
-    (unless edits-json
-      (format *error-output* "Error: --edits is required~%")
-      (clingon:exit 1))
-    (handler-case
-        (let* ((edits-list (cl-json:decode-json-from-string edits-json))
-               (edit-plists (mapcar (lambda (e)
-                                      (let ((op-str (cdr (assoc :operation e)))
-                                            (code (cdr (assoc :code e)))
-                                            (index-val (cdr (assoc :index e)))
-                                            (line-val (cdr (assoc :line e)))
-                                            (col-val (cdr (assoc :col e))))
-                                        (list :operation (if op-str
-                                                            (intern (string-upcase op-str) :keyword)
-                                                            :replace-index)
-                                              :code code
-                                              :index index-val
-                                              :line line-val
-                                              :col col-val
-                                              :pretty pretty)))
-                                    edits-list))
-               (result (apply-batch-edits text edit-plists :recovery recovery)))
-          (cond
-            (preview
-             (if file
-                 (preview-edit original-text result file)
-                 (progn
-                   (format *error-output* "Error: --preview requires --file~%")
-                   (clingon:exit 1))))
-            (write
-             (if file
-                 (let ((diff (generate-unified-diff original-text result file)))
-                   (write-result-to-file file result quiet)
-                   (if diff
-                       (format *standard-output* "~a" diff)
-                       (format *standard-output* "No changes made.~%")))
-                 (progn
-                   (format *error-output* "Error: --write requires --file~%")
-                   (clingon:exit 1))))
-            (t (format *standard-output* "~a" result))))
-      (error (c)
-        (format *error-output* "Error: ~a~%" c)
-        (clingon:exit 1)))))
+  (with-edit-context (cmd)
+    (let ((edits-json (clingon:getopt cmd :edits)))
+      (unless edits-json
+        (format *error-output* "Error: --edits is required~%")
+        (clingon:exit 1))
+      (handler-case
+          (let* ((edits-list (cl-json:decode-json-from-string edits-json))
+                 (edit-plists (mapcar (lambda (e)
+                                        (let ((op-str (cdr (assoc :operation e)))
+                                              (code (cdr (assoc :code e)))
+                                              (index-val (cdr (assoc :index e)))
+                                              (line-val (cdr (assoc :line e)))
+                                              (col-val (cdr (assoc :col e))))
+                                          (list :operation (if op-str
+                                                               (intern (string-upcase op-str) :keyword)
+                                                               :replace-index)
+                                                :code code
+                                                :index index-val
+                                                :line line-val
+                                                :col col-val
+                                                :pretty pretty)))
+                                      edits-list))
+                 (result (apply-batch-edits text edit-plists :recovery recovery)))
+            (validate-edited-source result recovery no-validate-result)
+            (deliver-edit-result result original-text file preview write quiet))
+        (error (c)
+          (format *error-output* "Error: ~a~%" c)
+          (clingon:exit 1))))))
 
 (defun batch-replace/command ()
   (clingon:make-command

@@ -338,62 +338,62 @@
 ;;; Batch Operations
 ;;; ============================================================
 
+(defun top-level-node-at (text index &key recovery)
+  "Return the INDEX-th top-level node of TEXT, signaling an error if out of range."
+  (let* ((ast (parse-for-edit text recovery))
+         (forms (list-top-level ast)))
+    (when (or (< index 0) (>= index (length forms)))
+      (error "Index ~a out of range (0-~a)" index (1- (length forms))))
+    (nth index forms)))
+
+(defun splice-replacement (text node new-code)
+  "Replace the region NODE spans in TEXT with NEW-CODE."
+  (concatenate 'string
+               (subseq text 0 (node-start node))
+               new-code
+               (subseq text (node-end node))))
+
+(defun edit-replace-index (text edit &optional recovery)
+  "Apply a :replace-index EDIT to TEXT."
+  (let ((node (top-level-node-at text (getf edit :index) :recovery recovery)))
+    (if (getf edit :pretty)
+        (replace-form-pretty text node (getf edit :code))
+        (splice-replacement text node (getf edit :code)))))
+
+(defun edit-replace-position (text edit &optional recovery)
+  "Apply a :replace-position EDIT to TEXT."
+  (let* ((ast (parse-for-edit text recovery))
+         (node (find-form-at ast text (getf edit :line) (getf edit :col))))
+    (unless node
+      (error "No form found at line ~a, col ~a" (getf edit :line) (getf edit :col)))
+    (if (getf edit :pretty)
+        (replace-form-pretty text node (getf edit :code))
+        (splice-replacement text node (getf edit :code)))))
+
+(defun edit-delete-index (text edit &optional recovery)
+  "Apply a :delete-index EDIT to TEXT."
+  (delete-node-from-text text (top-level-node-at text (getf edit :index) :recovery recovery)))
+
+(defun edit-insert-after-index (text edit &optional recovery)
+  "Apply an :insert-after-index EDIT to TEXT."
+  (let* ((node (top-level-node-at text (getf edit :index) :recovery recovery))
+         (end (node-end node))
+         (code (getf edit :code)))
+    (concatenate 'string
+                 (subseq text 0 end)
+                 code
+                 (subseq text end))))
+
 (defun apply-single-edit (text edit &key recovery)
   "Apply a single EDIT plist to TEXT.
    EDIT is a plist with :operation, :code, and either :index or :line/:col.
    Returns the modified text."
-  (let ((op (getf edit :operation))
-        (code (getf edit :code))
-        (index (getf edit :index))
-        (line (getf edit :line))
-        (col (getf edit :col))
-        (pretty (getf edit :pretty)))
-    (cond
-      ((eq op :replace-index)
-       (let* ((ast (parse-for-edit text recovery))
-              (forms (list-top-level ast)))
-         (when (or (< index 0) (>= index (length forms)))
-           (error "Index ~a out of range (0-~a)" index (1- (length forms))))
-         (let ((node (nth index forms)))
-           (if pretty
-               (replace-form-pretty text node code)
-               (let ((start (node-start node))
-                     (end (node-end node)))
-                 (concatenate 'string
-                              (subseq text 0 start)
-                              code
-                              (subseq text end)))))))
-      ((eq op :replace-position)
-       (let* ((ast (parse-for-edit text recovery))
-              (node (find-form-at ast text line col)))
-         (unless node
-           (error "No form found at line ~a, col ~a" line col))
-         (if pretty
-             (replace-form-pretty text node code)
-             (let ((start (node-start node))
-                   (end (node-end node)))
-               (concatenate 'string
-                            (subseq text 0 start)
-                            code
-                            (subseq text end))))))
-      ((eq op :delete-index)
-       (let* ((ast (parse-for-edit text recovery))
-              (forms (list-top-level ast)))
-         (when (or (< index 0) (>= index (length forms)))
-           (error "Index ~a out of range (0-~a)" index (1- (length forms))))
-         (delete-node-from-text text (nth index forms))))
-      ((eq op :insert-after-index)
-       (let* ((ast (parse-for-edit text recovery))
-              (forms (list-top-level ast)))
-         (when (or (< index 0) (>= index (length forms)))
-           (error "Index ~a out of range (0-~a)" index (1- (length forms))))
-         (let ((node (nth index forms)))
-           (let ((end (node-end node)))
-             (concatenate 'string
-                          (subseq text 0 end)
-                          code
-                          (subseq text end))))))
-      (t (error "Unknown operation: ~a" op)))))
+  (case (getf edit :operation)
+    (:replace-index (edit-replace-index text edit recovery))
+    (:replace-position (edit-replace-position text edit recovery))
+    (:delete-index (edit-delete-index text edit recovery))
+    (:insert-after-index (edit-insert-after-index text edit recovery))
+    (t (error "Unknown operation: ~a" (getf edit :operation)))))
 
 (defun apply-batch-edits (text edits &key recovery)
   "Apply a list of EDIT plists to TEXT.
@@ -559,10 +559,36 @@
                         to-start)))
     (values form-text del-end insert-at)))
 
+(defun preceding-line-start (text pos)
+  "Return the offset of the first character of the line containing POS.
+   Walks back to just after the preceding newline (or start of text)."
+  (let ((i pos))
+    (loop while (and (> i 0)
+                     (char/= (char text (1- i)) #\Newline))
+          do (decf i))
+    i))
+
+(defun count-leading-spaces (text pos)
+  "Count leading spaces on the line containing POS."
+  (let ((line-start (preceding-line-start text pos))
+        (i 0))
+    (loop while (and (< (+ line-start i) (length text))
+                     (char= (char text (+ line-start i)) #\Space))
+          do (incf i))
+    i))
+
+(defun count-leading-newlines (text pos)
+  "Count consecutive newlines starting at POS in TEXT."
+  (let ((count 0))
+    (loop for i from pos below (length text)
+          while (char= (char text i) #\Newline)
+          do (incf count))
+    count))
+
 (defun move-form (text from-line from-col to-line to-col &key recovery)
   "Move the form at (FROM-LINE, FROM-COL) to after (TO-LINE, TO-COL).
-   When RECOVERY is T, use error recovery parser.
-   Returns the modified source string."
+    When RECOVERY is T, use error recovery parser.
+    Returns the modified source string."
   (multiple-value-bind (from-node to-node)
       (move-find-nodes text from-line from-col to-line to-col recovery)
     ;; No-op if same node
@@ -570,69 +596,34 @@
       (return-from move-form text))
     (let* ((from-start (node-start from-node))
            (from-end (node-end from-node))
-           (to-end (node-end to-node))
            (form-text (subseq text from-start from-end)))
-      ;; Step 1: Delete the source form's entire line
-      ;; Find the line boundaries in the original text
-      (let* ((del-start
-              ;; Walk backward to find preceding newline (or start of file)
-              ;; We want del-start to be the position of the \n itself
-              (let ((i from-start))
-                (loop while (and (> i 0)
-                                 (char/= (char text (1- i)) #\Newline))
-                      do (decf i))
-                ;; i is now at the first char after the preceding \n
-                ;; Back up one more to include the \n in the deletion
-                (if (and (> i 0) (char= (char text (1- i)) #\Newline))
-                    (1- i)
-                    i)))
-             (del-end
-              ;; The source form ends at from-end. Don't delete past it
-              ;; (the closing parens after it belong to the parent form)
-              from-end)
-              (before-del (subseq text 0 del-start))
-             (after-del (subseq text del-end)))
-        ;; Step 2: In the text after deletion, find the destination node
-        ;; Re-parse the deleted text to find where to insert
-         (let* ((deleted-text-str (concatenate 'string before-del after-del))
-                ;; Find the destination node in the post-deletion text
-                (dest-text (subseq text (node-start to-node) to-end))
-                (dest-pos (search dest-text deleted-text-str)))
-           (unless dest-pos
-             (error "Destination form not found after deletion"))
-           ;; Insert after the destination form on a new line
-           ;; Find the indentation of the destination form
-           (let* ((line-start
-                   (let ((i dest-pos))
-                     (loop while (and (> i 0)
-                                      (char/= (char deleted-text-str (1- i)) #\Newline))
-                           do (decf i))
-                     i))
-                  (indent (let ((i line-start))
-                            (loop while (and (< i (length deleted-text-str))
-                                             (char= (char deleted-text-str i) #\Space))
-                                  do (incf i))
-                            (- i line-start)))
-                  (indented-form (concatenate 'string
-                                              (make-string indent :initial-element #\Space)
-                                              form-text))
-                  ;; Insert right after the destination form's closing paren
-                  (dest-end (+ dest-pos (length dest-text)))
-                  ;; Count leading newlines after dest to determine spacing context
-                  (rest-after-dest (subseq deleted-text-str dest-end))
-                  (num-leading-nls (let ((count 0))
-                                     (loop for ch across rest-after-dest
-                                           while (char= ch #\Newline)
-                                           do (incf count))
-                                     count))
-                  ;; Use same number of newlines as original spacing (minimum 1)
-                  (spacing-nls (max 1 num-leading-nls)))
-             ;; Build result: dest + spacing + indented form + rest
-             (concatenate 'string
-                          (subseq deleted-text-str 0 dest-end)
-                          (make-string spacing-nls :initial-element #\Newline)
-                          indented-form
-                          (subseq deleted-text-str dest-end))))))))
+      ;; Step 1: Delete the source form's entire line.
+      ;; del-start includes the preceding newline so no blank line remains;
+      ;; del-end stops at the form's end (trailing parens belong to the parent).
+      (let* ((del-start (if (plusp from-start)
+                            (1- (preceding-line-start text from-start))
+                            0))
+             (deleted-text-str (concatenate 'string
+                                            (subseq text 0 del-start)
+                                            (subseq text from-end)))
+             ;; Step 2: Find where the destination landed after deletion
+             (dest-text (subseq text (node-start to-node) (node-end to-node)))
+             (dest-pos (search dest-text deleted-text-str)))
+        (unless dest-pos
+          (error "Destination form not found after deletion"))
+        ;; Insert after the destination form, indented like it is,
+        ;; with at least one newline of separation.
+        (let* ((dest-end (+ dest-pos (length dest-text)))
+               (indent (count-leading-spaces deleted-text-str dest-pos))
+               (indented-form (concatenate 'string
+                                           (make-string indent :initial-element #\Space)
+                                           form-text))
+               (spacing-nls (max 1 (count-leading-newlines deleted-text-str dest-end))))
+          (concatenate 'string
+                       (subseq deleted-text-str 0 dest-end)
+                       (make-string spacing-nls :initial-element #\Newline)
+                       indented-form
+                       (subseq deleted-text-str dest-end)))))))
 ;;; ============================================================
 ;;; Balance Analysis
 ;;; ============================================================

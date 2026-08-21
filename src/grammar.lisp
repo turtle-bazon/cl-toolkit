@@ -139,8 +139,16 @@
              (exponent (if exp exp 0)))
         (float (* base (expt 10 exponent)) 1.0d0)))))
 
+(defrule int-with-exponent
+    (and integer-part (? float-exponent))
+  (:lambda (result)
+    (destructuring-bind (int exp) result
+      (if exp
+          (float (* int (expt 10 exp)) 1.0d0)
+          int))))
+
 (defrule number
-    (or float-body integer-part)
+    (or float-body int-with-exponent)
   (:lambda (val &bounds start end)
     (make-node :number :value val :start start :end end)))
 
@@ -164,17 +172,23 @@
     (if (consp dispatch) dispatch
         (make-node :symbol :name (format nil "#~a" dispatch) :start start :end end))))
 
-;;; Symbol (must not start with digit)
+;;; Symbol (must not start with digit, but may contain digits)
 (defrule sign-char
     (or #\+ #\-))
 
+(defrule symbol-head-char
+    (or alpha #\- #\* #\+ #\! #\? #\_ #\= #\< #\> #\& #\/ #\~ #\@ #\$ #\% #\^ #\: #\# #\| #\` #\,))
+
+(defrule symbol-tail-char
+    (or symbol-head-char digit #\. #\[ #\]))
+
 (defrule symbol-body
-    (+ symbol-char)
+    (+ symbol-tail-char)
   (:lambda (chars)
     (esrap:text chars)))
 
 (defrule symbol
-    (+ (or alpha #\- #\* #\+ #\! #\? #\_ #\= #\< #\> #\& #\/ #\~ #\@ #\$ #\% #\^ #\: #\# #\| #\` #\,))
+    (and symbol-head-char (* symbol-tail-char))
   (:lambda (chars &bounds start end)
     (let ((full (esrap:text chars)))
       (let ((colon (position #\: full)))
