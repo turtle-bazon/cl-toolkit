@@ -110,11 +110,17 @@
     (declare (ignore open close))
     (make-node :string :value body :start start :end end)))
 
-;;; Number (integer or float)
+;;; Number (integer or float).
+;;; Boundary check: a number must not be followed by a symbol character,
+;;; so tokens like 1+ / 1- / 123abc fall through to the symbol rule
+;;; (matching the CL reader, where 1+ and 1- are symbols).
 (defrule integer-part
     (+ digit)
   (:lambda (chars)
     (parse-integer (esrap:text chars))))
+
+(defrule not-symbol-tail-char
+    (! symbol-tail-char))
 
 (defrule float-exponent
     (and (or #\e #\E) (? (or #\+ #\-)) (+ digit))
@@ -126,10 +132,10 @@
         (parse-integer (concatenate 'string sign-str digits-str))))))
 
 (defrule float-body
-    (and integer-part #\. (+ digit) (? float-exponent))
+    (and integer-part #\. (+ digit) (? float-exponent) not-symbol-tail-char)
   (:lambda (result)
-    (destructuring-bind (int dot digits exp) result
-      (declare (ignore dot))
+    (destructuring-bind (int dot digits exp _) result
+      (declare (ignore dot _))
       (let* ((frac (map 'string #'identity digits))
              (frac-val (if (> (length frac) 0)
                            (/ (parse-integer frac)
@@ -140,17 +146,23 @@
         (float (* base (expt 10 exponent)) 1.0d0)))))
 
 (defrule int-with-exponent
-    (and integer-part (? float-exponent))
+    (and integer-part float-exponent not-symbol-tail-char)
   (:lambda (result)
-    (destructuring-bind (int exp) result
-      (if exp
-          (float (* int (expt 10 exp)) 1.0d0)
-          int))))
+    (destructuring-bind (int exp _) result
+      (float (* int (expt 10 exp)) 1.0d0))))
+
+(defrule plain-integer
+    (and integer-part not-symbol-tail-char)
+  (:lambda (result)
+    (first result)))
 
 (defrule number
-    (or float-body int-with-exponent)
-  (:lambda (val &bounds start end)
-    (make-node :number :value val :start start :end end)))
+    (and (? sign-char) (or float-body int-with-exponent plain-integer))
+  (:lambda (result &bounds start end)
+    (destructuring-bind (sign val) result
+      (make-node :number
+                 :value (if (and sign (string= sign "-")) (- val) val)
+                 :start start :end end))))
 
 ;;; Character literal
 (defrule char-name
@@ -172,15 +184,17 @@
     (if (consp dispatch) dispatch
         (make-node :symbol :name (format nil "#~a" dispatch) :start start :end end))))
 
-;;; Symbol (must not start with digit, but may contain digits)
+;;; Symbol. May start with a digit only if the whole token is not a
+;;; valid number — the number rule is ordered before symbol in `form`,
+;;; and its boundary checks make tokens like 1+/123abc fall through.
 (defrule sign-char
     (or #\+ #\-))
 
 (defrule symbol-head-char
-    (or alpha #\- #\* #\+ #\! #\? #\_ #\= #\< #\> #\& #\/ #\~ #\@ #\$ #\% #\^ #\: #\# #\| #\` #\,))
+    (or alpha digit #\- #\* #\+ #\! #\? #\_ #\= #\< #\> #\& #\/ #\~ #\@ #\$ #\% #\^ #\: #\# #\| #\` #\,))
 
 (defrule symbol-tail-char
-    (or symbol-head-char digit #\. #\[ #\]))
+    (or symbol-head-char #\. #\[ #\]))
 
 (defrule symbol-body
     (+ symbol-tail-char)
