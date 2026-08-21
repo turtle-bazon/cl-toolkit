@@ -3,71 +3,6 @@ import { execFileSync } from "child_process"
 import { readFileSync, existsSync } from "fs"
 import path from "path"
 
-function generateDiff(original: string, modified: string, filePath: string): string {
-  const originalLines = original.split('\n')
-  const modifiedLines = modified.split('\n')
-  
-  while (originalLines.length > 0 && originalLines[originalLines.length - 1] === '') {
-    originalLines.pop()
-  }
-  while (modifiedLines.length > 0 && modifiedLines[modifiedLines.length - 1] === '') {
-    modifiedLines.pop()
-  }
-  
-  if (original === modified) return ''
-  
-  const diff: string[] = []
-  diff.push(`--- a/${filePath}`)
-  diff.push(`+++ b/${filePath}`)
-  
-  let i = 0, j = 0
-  const hunks: { startOld: number; startNew: number; lines: string[] }[] = []
-  let currentHunk: { startOld: number; startNew: number; lines: string[] } | null = null
-  
-  while (i < originalLines.length || j < modifiedLines.length) {
-    if (i < originalLines.length && j < modifiedLines.length && originalLines[i] === modifiedLines[j]) {
-      if (currentHunk) {
-        currentHunk.lines.push(` ${originalLines[i]}`)
-      }
-      i++
-      j++
-    } else {
-      if (!currentHunk) {
-        currentHunk = { startOld: i, startNew: j, lines: [] }
-        hunks.push(currentHunk)
-      }
-      
-      if (i < originalLines.length && (j >= modifiedLines.length || originalLines.indexOf(modifiedLines[j], i) === -1)) {
-        currentHunk.lines.push(`-${originalLines[i]}`)
-        i++
-      } else if (j < modifiedLines.length) {
-        currentHunk.lines.push(`+${modifiedLines[j]}`)
-        j++
-      }
-      
-      if (currentHunk && currentHunk.lines.length > 0) {
-        const lastLine = currentHunk.lines[currentHunk.lines.length - 1]
-        if (lastLine.startsWith(' ') && 
-            i < originalLines.length && j < modifiedLines.length &&
-            originalLines[i] === modifiedLines[j] &&
-            originalLines[i+1] === modifiedLines[j+1] &&
-            originalLines[i+2] === modifiedLines[j+2]) {
-          currentHunk = null
-        }
-      }
-    }
-  }
-  
-  for (const hunk of hunks) {
-    const oldLen = hunk.lines.filter(l => l.startsWith('-') || l.startsWith(' ')).length
-    const newLen = hunk.lines.filter(l => l.startsWith('+') || l.startsWith(' ')).length
-    diff.push(`@@ -${hunk.startOld + 1},${oldLen} +${hunk.startNew + 1},${newLen} @@`)
-    diff.push(...hunk.lines)
-  }
-  
-  return diff.join('\n')
-}
-
 const CL_TOOLKIT_PATH = path.resolve(__dirname, "../../build/cl-toolkit")
 const REPO_DIR = path.resolve(__dirname, "../..")  // Updated by setup.sh
 
@@ -126,7 +61,7 @@ export default tool({
   description: "Parse, validate, and edit Common Lisp code using cl-toolkit (PEG parser with error recovery)",
   args: {
     command: tool.schema
-      .enum(["parse", "validate", "find", "extract", "top-level", "delete-form", "insert-form", "append-form", "replace-form", "move-form", "insert", "balance", "format", "batch-replace"])
+      .enum(["parse", "validate", "find", "extract", "top-level", "source-of", "find-forms", "delete-form", "insert-form", "append-form", "replace-form", "move-form", "insert", "balance", "format", "batch-replace"])
       .describe("Command to execute"),
     code: tool.schema.string().optional().describe("Inline Lisp code to parse/insert/replace"),
     filePath: tool.schema.string().optional().describe("Path to .lisp file"),
@@ -148,25 +83,17 @@ export default tool({
     preview: tool.schema.boolean().optional().describe("Show diff without writing (all edit commands)"),
     pretty: tool.schema.boolean().optional().describe("Preserve indentation (replace-form)"),
     edits: tool.schema.string().optional().describe("JSON array of edits (batch-replace command)"),
+    match: tool.schema.string().optional().describe("Replace smallest subform matching this snippet (replace-form, requires name/index/end)"),
+    contains: tool.schema.string().optional().describe("Snippet to search for (find-forms command)"),
   },
   async execute(args, context) {
-    const { command, code, filePath, recovery, write, validate, noValidateInput, noValidateResult, index, line, col, line1, col1, line2, col2, indent, end, name, preview, pretty, edits } = args
+    const { command, code, filePath, recovery, write, validate, noValidateInput, noValidateResult, index, line, col, line1, col1, line2, col2, indent, end, name, preview, pretty, edits, match, contains } = args
 
     // Resolve file path if provided
     let absolutePath: string | undefined
     if (filePath) {
       const workdir = context.worktree || process.cwd()
       absolutePath = path.resolve(workdir, filePath)
-    }
-
-    // Read original file for diff generation (modification commands only)
-    let originalSource: string | undefined
-    if (absolutePath && ["delete-form", "insert-form", "append-form", "replace-form", "move-form", "insert", "format", "batch-replace"].includes(command)) {
-      try {
-        originalSource = readFileSync(absolutePath, "utf-8")
-      } catch (e) {
-        // File might not exist yet
-      }
     }
 
     // Build command arguments
@@ -278,6 +205,7 @@ export default tool({
       if (noValidateResult) cmdArgs.push("--no-validate-result")
       if (preview) cmdArgs.push("--preview")
       if (pretty) cmdArgs.push("--pretty")
+      if (match) cmdArgs.push("--match", match)
       if (end) {
         cmdArgs.push("--file", absolutePath, "--end", "--replace", code)
       } else if (name) {
@@ -325,6 +253,24 @@ export default tool({
       if (noValidateResult) cmdArgs.push("--no-validate-result")
       if (preview) cmdArgs.push("--preview")
       cmdArgs.push("--file", absolutePath, "--edits", edits)
+    } else if (command === "source-of") {
+      if (!absolutePath && !code) {
+        return JSON.stringify({ error: "source-of command requires filePath or code" })
+      }
+      if (name) {
+        cmdArgs.push("--file", absolutePath!, "--name", name)
+      } else if (end) {
+        cmdArgs.push("--file", absolutePath!, "--end")
+      } else if (index !== undefined) {
+        cmdArgs.push("--file", absolutePath!, "--index", String(index))
+      } else {
+        return JSON.stringify({ error: "source-of command requires name, index, or end" })
+      }
+    } else if (command === "find-forms") {
+      if (!contains) {
+        return JSON.stringify({ error: "find-forms command requires contains (snippet)" })
+      }
+      cmdArgs.push("--file", absolutePath!, "--contains", contains)
     } else if (command === "balance") {
       if (absolutePath) {
         cmdArgs.push("--file", absolutePath)
@@ -397,34 +343,14 @@ export default tool({
       // Check if output is JSON before parsing (modification commands without --write return plain text)
       const isJson = stdout.trimStart().startsWith("{") || stdout.trimStart().startsWith("[")
       if (!isJson) {
-        // Plain text output from modification command without --write
+        // Plain text output from modification command without --write:
+        // the CLI printed the full modified source. Return it verbatim —
+        // generating diffs client-side produced corrupt previews.
         if (absolutePath && ["delete-form", "insert-form", "append-form", "replace-form", "move-form", "insert", "batch-replace"].includes(command)) {
-          let diff = ""
-          if (originalSource) {
-            diff = generateDiff(originalSource, stdout, absolutePath)
-          }
-          if (diff) {
-            const additions = (diff.match(/^\+/gm) || []).length
-            const deletions = (diff.match(/^-/gm) || []).length
-            return {
-              title: `cl-toolkit ${command} ${path.basename(absolutePath)}`,
-              output: diff,
-              metadata: {
-                diff,
-                filediff: {
-                  file: absolutePath,
-                  patch: diff,
-                  additions,
-                  deletions,
-                },
-                diagnostics: {},
-              },
-            }
-          }
           return JSON.stringify({
             success: true,
             source: stdout,
-            _summary: `${command} command completed (no changes)`,
+            _summary: `${command} result (source preview)`,
           })
         }
         return stdout
@@ -466,28 +392,6 @@ export default tool({
       if (["delete", "insert", "replace", "move"].includes(command)) {
         // Without --write, CLI returns the modified source
         if (result.success) {
-          let diff = ""
-          if (originalSource && absolutePath) {
-            diff = generateDiff(originalSource, result.source, absolutePath)
-          }
-          if (diff) {
-            const additions = (diff.match(/^\+/gm) || []).length
-            const deletions = (diff.match(/^-/gm) || []).length
-            return {
-              title: `cl-toolkit ${command} ${path.basename(absolutePath)}`,
-              output: diff,
-              metadata: {
-                diff,
-                filediff: {
-                  file: absolutePath,
-                  patch: diff,
-                  additions,
-                  deletions,
-                },
-                diagnostics: {},
-              },
-            }
-          }
           return JSON.stringify({
             success: true,
             source: result.source,
@@ -517,21 +421,17 @@ export default tool({
       // Handle format command
       if (command === "format") {
         // Without --write, CLI returns formatted source
-        let diff = ""
-        if (originalSource && result.source && absolutePath) {
-          diff = generateDiff(originalSource, result.source, absolutePath)
-        }
-        if (diff) {
-          const additions = (diff.match(/^\+/gm) || []).length
-          const deletions = (diff.match(/^-/gm) || []).length
+        if (write && stdout.startsWith("---")) {
+          const additions = (stdout.match(/^\+/gm) || []).length
+          const deletions = (stdout.match(/^-/gm) || []).length
           return {
-            title: `cl-toolkit format ${path.basename(absolutePath)}`,
-            output: diff,
+            title: `cl-toolkit format ${path.basename(absolutePath!)}`,
+            output: stdout,
             metadata: {
-              diff,
+              diff: stdout,
               filediff: {
-                file: absolutePath,
-                patch: diff,
+                file: absolutePath!,
+                patch: stdout,
                 additions,
                 deletions,
               },
@@ -540,7 +440,7 @@ export default tool({
           }
         }
         return JSON.stringify({
-          source: result.source,
+          source: result.source ?? stdout,
           _summary: "Code reformatted",
         })
       }

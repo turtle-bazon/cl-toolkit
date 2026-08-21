@@ -339,7 +339,7 @@ node ~/cl-toolkit/setup.js .opencode
 ### Agent Usage
 
 Tell the agent:
-> Use cl-toolkit to parse/validate/edit Lisp code. Commands: parse, validate, find, extract, top-level, delete-form, insert-form, append-form, insert, replace-form, move-form, balance, format.
+> Use cl-toolkit to parse/validate/edit Lisp code. Commands: parse, validate, find, extract, top-level, source-of, find-forms, delete-form, insert-form, append-form, insert, replace-form, move-form, balance, format.
 
 Example prompts:
 - "Parse this file and show me the top-level forms"
@@ -351,6 +351,61 @@ Example prompts:
 - "Move the form from line 3 to after line 8"
 - "Check parenthesis balance in this file"
 - "Format this file with consistent indentation"
+
+### Safe Read-Modify-Write of Large Forms
+
+Never reconstruct a large function from memory. Extract exact current
+source first:
+
+```bash
+# 1. Read exact source
+cl-toolkit source-of --file X.lisp --name dispatch-token > /tmp/form.lisp
+
+# 2. Edit /tmp/form.lisp (any tool)
+
+# 3. Write back by name
+cl-toolkit replace-form --file X.lisp --name dispatch-token \
+  --replace "$(cat /tmp/form.lisp)" --write
+```
+
+### Surgical Subform Replacement
+
+Change one clause inside a large function without rewriting it:
+
+```bash
+# Replace smallest subform matching the snippet inside the named form
+cl-toolkit replace-form --file X.lisp --name dispatch-token \
+  --match '(string= tok "?")' --replace '(string= tok "?" :test #'equal)'
+```
+
+Exact trimmed matches are preferred; falls back to first contains-match.
+Every non-quiet edit reports which form was targeted with its resolved
+line/col — verify that output before trusting a write.
+
+### Structural Search
+
+```bash
+# Find every top-level form containing a snippet (catches duplicated bugs)
+cl-toolkit find-forms --file src/*.lisp --contains "(nreverse args)" --with-source
+```
+
+### Line Numbers Are 0-Based
+
+All `--line` arguments and displayed `[line N]` values use 0-based,
+newline-delimited counting. A value shown anywhere can be passed back
+to `--line` verbatim.
+
+### Shell Quoting
+
+Arguments containing `#'` and quoted lists are fragile in bash. Prefer
+the reader-macro-free spellings — they are semantically identical:
+
+```bash
+# Fragile:
+--replace "(member s '(:a) :test #'+)"
+# Robust:
+--replace "(member s (quote (:a)) :test (function +))"
+```
 
 ## OpenCode Integration
 

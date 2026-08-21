@@ -234,12 +234,15 @@
                :start start :end end)))
 
 ;;; Quote/sharp-reader macros
+;;; Marker symbols carry the reader-macro's own bounds so every node in
+;;; the tree has usable :start/:end (needed by source extraction).
 (defrule quote-form
     (and #\' ws form)
   (:destructure (quote ws form &bounds start end)
     (declare (ignore quote ws))
     (make-node :list
-               :children (list (make-node :symbol :name "QUOTE")
+               :children (list (make-node :symbol :name "QUOTE"
+                                          :start start :end (+ start 1))
                                form)
                :start start :end end)))
 
@@ -248,7 +251,8 @@
   (:destructure (sharp ws form &bounds start end)
     (declare (ignore sharp ws))
     (make-node :list
-               :children (list (make-node :symbol :name "FUNCTION")
+               :children (list (make-node :symbol :name "FUNCTION"
+                                          :start start :end (+ start 2))
                                form)
                :start start :end end)))
 
@@ -257,7 +261,8 @@
   (:destructure (sharp ws form &bounds start end)
     (declare (ignore sharp ws))
     (make-node :list
-               :children (list (make-node :symbol :name "EVAL")
+               :children (list (make-node :symbol :name "EVAL"
+                                          :start start :end (+ start 2))
                                form)
                :start start :end end)))
 

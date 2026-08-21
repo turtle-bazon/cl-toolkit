@@ -69,18 +69,27 @@
       (format *standard-output* "{\"success\":true,\"source\":\"~a\"}~%"
               (cl-toolkit-ast::escape-json-string text))))
 
+(defun resolve-file-path (file)
+  "Normalize FILE to an absolute path against the current working directory.
+   Prevents cwd-dependent bugs when relative paths are passed between
+   invocations or used for backup naming."
+  (when file
+    (namestring (merge-pathnames file))))
+
 (defun write-result-to-file (file result &optional quiet)
-  "Write RESULT source to FILE. Creates FILE.bak backup first."
+  "Write RESULT source to FILE. Creates FILE.bak backup first.
+   Refuses to write when FILE does not exist — --write edits, never creates."
   (let ((source (if (stringp result)
                     result
                     (getf result :source))))
     (unless source
       (error "No source in result"))
+    (unless (probe-file file)
+      (error "Cannot write: file does not exist: ~a" file))
     (let ((bak (concatenate 'string file ".bak")))
-      (when (probe-file file)
-        (when (probe-file bak)
-          (delete-file bak))
-        (rename-file file bak))
+      (when (probe-file bak)
+        (delete-file bak))
+      (rename-file file bak)
       (with-open-file (stream file :direction :output
                                    :if-exists :supersede
                                    :if-does-not-exist :create)
@@ -161,10 +170,24 @@
           (recovery (clingon:getopt ,cmd :recovery))
           (no-validate-input (clingon:getopt ,cmd :no-validate-input))
           (no-validate-result (clingon:getopt ,cmd :no-validate-result))
-          (file (clingon:getopt ,cmd :file))
+          (match (clingon:getopt ,cmd :match))
+          (file (resolve-file-path (clingon:getopt ,cmd :file)))
           (text (read-input ,cmd))
           (original-text (when file (read-file-to-string file))))
      ,@body))
+
+(defun notify-target (verb node text)
+  "Report to stderr which form VERB targets: name (when known) plus
+   resolved line/col. Surfaces position-resolution mismatches immediately
+   instead of letting silent mis-targeting corrupt files."
+  (multiple-value-bind (line col)
+      (cl-toolkit-ast::offset-to-line-col text (node-start node))
+    (let ((form-name (node-form-name node)))
+      (if form-name
+          (format *error-output* "~a form '~a' [line ~a, col ~a]~%"
+                  verb form-name line col)
+          (format *error-output* "~a form [line ~a, col ~a]~%"
+                  verb line col)))))
 
 ;;; ============================================================
 ;;; Shared Options
@@ -243,7 +266,14 @@
          (ast (cl-toolkit-grammar::parse-lisp-source text))
          (found (find-form-at ast text line col)))
     (if found
-        (output-json found)
+        ;; Enrich with resolved 0-based line/col so callers can verify
+        ;; that the position they asked for maps to the form they expect.
+        (multiple-value-bind (l c)
+            (cl-toolkit-ast::offset-to-line-col text (node-start found))
+          (let ((copy (copy-list found)))
+            (setf (getf copy :line) l
+                  (getf copy :col) c)
+            (output-json copy)))
         (progn
           (format *error-output* "No form found at line ~a, col ~a~%" line col)
           (clingon:exit 1)))))
@@ -375,14 +405,16 @@
          (ast (cl-toolkit-grammar::parse-lisp-source text))
          (forms (list-top-level ast)))
     (if names
-        ;; Concise name listing with indices
+        ;; Concise name listing with indices.
+        ;; Line numbers are 0-based — identical semantics as --line args,
+        ;; so displayed values can be passed back verbatim.
         (loop for form in forms
               for i from 0
               do (multiple-value-bind (line col)
-                     (cl-toolkit-ast:offset-to-line-col text (cl-toolkit-ast:node-start form))
-                   (let ((name (cl-toolkit-ast:node-form-name form)))
-                     (format *standard-output* "~a: ~a  [line ~a, col ~a]~%"
-                             i (or name "?") (1+ line) col))))
+                      (cl-toolkit-ast:offset-to-line-col text (cl-toolkit-ast:node-start form))
+                    (let ((name (cl-toolkit-ast:node-form-name form)))
+                      (format *standard-output* "~a: ~a  [line ~a, col ~a]~%"
+                              i (or name "?") line col))))
         ;; Existing JSON array output
         (progn
           (format *standard-output* "[")
@@ -492,24 +524,34 @@
 (defun delete/handler (cmd)
   (with-edit-context (cmd)
     (handler-case
-        (let ((result
+        (let* (target-node
+               (result
                 (cond
                   (end
-                   (delete-last-top-level text :recovery recovery))
+                   (let ((node (first (last (list-top-level (parse-for-edit text recovery))))))
+                     (setf target-node node)
+                     (delete-last-top-level text :recovery recovery)))
                   (name
                    (let ((node (find-top-level-by-name text name :recovery recovery)))
                      (unless node
                        (format *error-output* "Error: No top-level form named '~a'~%" name)
                        (clingon:exit 1))
+                     (setf target-node node)
                      (delete-node-from-text text node)))
                   (index
-                   (delete-top-level-at text index :recovery recovery))
+                   (let ((node (top-level-node-at text index :recovery recovery)))
+                     (setf target-node node)
+                     (delete-node-from-text text node)))
                   ((and line col)
-                   (delete-form-at text line col :recovery recovery))
+                   (let ((ast (parse-for-edit text recovery)))
+                     (setf target-node (find-form-at ast text line col))
+                     (delete-form-at text line col :recovery recovery)))
                   (t
                    (format *error-output* "Error: --end, --name, --index, or --line/--col required~%")
                    (clingon:exit 1)))))
           (validate-edited-source result recovery no-validate-result)
+          (when (and target-node (not quiet))
+            (notify-target "Deleting" target-node text))
           (deliver-edit-result result original-text file preview write quiet))
       (error (c)
         (output-edit-result nil (format nil "~a" c))))))
@@ -661,14 +703,18 @@
       (clingon:exit 1))
     (validate-new-code code no-validate-input)
     (handler-case
-        (let ((result
+        (let* (target-node
+               (result
                 (cond
                   (end
-                   (insert-form-end text code))
+                   (let ((ast (parse-for-edit text recovery)))
+                     (setf target-node (first (last (list-top-level ast))))
+                     (insert-form-end text code)))
                   (name
                    (let ((node (find-top-level-by-name text name :recovery recovery)))
                      (unless node
                        (error "No top-level form named '~a'" name))
+                     (setf target-node node)
                      (let ((node-end (node-end node)))
                        (concatenate 'string
                                     (subseq text 0 node-end)
@@ -678,6 +724,8 @@
                   (t
                    (append-form-at text line col code :recovery recovery)))))
           (validate-edited-source result recovery no-validate-result)
+          (when (and target-node (not quiet))
+            (notify-target "Appending after" target-node text))
           (deliver-edit-result result original-text file preview write quiet))
       (error (c)
         (output-edit-result nil (format nil "~a" c))))))
@@ -732,6 +780,14 @@
                      code
                      (subseq text end)))))
 
+(defun resolve-replace-target (text node match)
+  "Narrow NODE to its smallest descendant whose source matches MATCH.
+   With a nil MATCH, returns NODE unchanged."
+  (if match
+      (or (find-subform-matching node text match)
+          (error "No subform matching ~s inside target form" match))
+      node))
+
 (defun replace/handler (cmd)
   (with-edit-context (cmd :code-key :replace-code)
     (unless code
@@ -740,34 +796,34 @@
     (unless (or (and line col) index name end)
       (format *error-output* "Error: --end, --name, --index, or --line/--col required~%")
       (clingon:exit 1))
+    (when (and match (not (or name index end)))
+      (format *error-output* "Error: --match requires --name, --index, or --end~%")
+      (clingon:exit 1))
     (validate-new-code code no-validate-input)
     (handler-case
-        (let ((result
+        (let* ((base-node
                 (cond
                   (end
-                   (let* ((ast (parse-for-edit text recovery))
-                          (node (first (last (list-top-level ast)))))
+                   (let ((node (first (last (list-top-level (parse-for-edit text recovery))))))
                      (unless node
                        (error "No top-level forms found"))
-                     (replace-node-with-code text node code pretty)))
+                     node))
                   (name
-                   (let ((node (find-top-level-by-name text name :recovery recovery)))
-                     (unless node
-                       (error "No top-level form named '~a'" name))
-                     (replace-node-with-code text node code pretty)))
+                   (or (find-top-level-by-name text name :recovery recovery)
+                       (error "No top-level form named '~a'" name)))
                   (index
-                   (let* ((ast (parse-for-edit text recovery))
-                          (node (nth index (list-top-level ast))))
+                   (let ((node (nth index (list-top-level (parse-for-edit text recovery)))))
                      (unless node
                        (error "Index ~a out of range" index))
-                     (replace-node-with-code text node code pretty)))
+                     node))
                   (t
-                   (let* ((ast (parse-for-edit text recovery))
-                          (node (find-form-at ast text line col)))
-                     (unless node
-                       (error "No form found at line ~a, col ~a" line col))
-                     (replace-node-with-code text node code pretty))))))
+                   (or (find-form-at (parse-for-edit text recovery) text line col)
+                       (error "No form found at line ~a, col ~a" line col)))))
+               (target-node (resolve-replace-target text base-node match))
+               (result (replace-node-with-code text target-node code pretty)))
           (validate-edited-source result recovery no-validate-result)
+          (when (and target-node (not quiet))
+            (notify-target (if match "Replacing in" "Replacing") target-node text))
           (deliver-edit-result result original-text file preview write quiet))
       (error (c)
         (output-edit-result nil (format nil "~a" c))))))
@@ -796,8 +852,10 @@
                                   :description "Top-level form index (0-based)" :key :index)
              (clingon:make-option :string :long-name "name" :short-name #\n
                                   :description "Top-level form name" :key :name)
-             (clingon:make-option :flag :long-name "end"
-                                  :description "Replace the last top-level form" :key :end)
+              (clingon:make-option :flag :long-name "end"
+                                   :description "Replace the last top-level form" :key :end)
+              (clingon:make-option :string :long-name "match"
+                                   :description "Replace smallest subform matching this snippet inside the target form" :key :match)
               (clingon:make-option :string :long-name "replace" :short-name #\r
                                    :description "Replacement code" :required t :key :replace-code)
              (clingon:make-option :flag :long-name "pretty"
@@ -925,7 +983,102 @@
               (clingon:make-option :flag :long-name "no-validate-result"
                                    :description "Skip result validation"
                                    :key :no-validate-result))
-   :handler #'batch-replace/handler))
+    :handler #'batch-replace/handler))
+
+;;; ============================================================
+;;; Source-of Command (exact source text extraction)
+;;; ============================================================
+
+(defun source-of/handler (cmd)
+  (let* ((name (clingon:getopt cmd :name))
+         (index (clingon:getopt cmd :index))
+         (end (clingon:getopt cmd :end))
+         (recovery (clingon:getopt cmd :recovery))
+         (text (read-input cmd)))
+    (unless (or name end index)
+      (format *error-output* "Error: --name, --index, or --end required~%")
+      (clingon:exit 1))
+    (let ((source (source-of-top-level text
+                                       :name name :index index :end end
+                                       :recovery recovery)))
+      (if source
+          (format *standard-output* "~a" source)
+          (progn
+            (format *error-output* "Error: no matching top-level form~%")
+            (clingon:exit 1))))))
+
+(defun source-of/command ()
+  (clingon:make-command
+   :name "source-of"
+   :usage "(-f FILE | --code CODE) (--name NAME | --index N | --end)"
+   :description "Print the exact source text of a top-level form"
+   :long-description "Extracts the verbatim source of one top-level form —
+   safe read step for read-modify-write of large forms:
+     source-of --name dispatch-token > /tmp/form.lisp
+     # edit /tmp/form.lisp, then:
+     replace-form --file X --name dispatch-token --replace \"$(cat /tmp/form.lisp)\")"
+   :options (list
+             (clingon:make-option :string :long-name "file" :short-name #\f
+                                  :description "File to read" :key :file)
+             (clingon:make-option :string :long-name "code"
+                                  :description "Inline code" :key :code)
+             (clingon:make-option :string :long-name "name" :short-name #\n
+                                  :description "Top-level form name" :key :name)
+             (clingon:make-option :integer :long-name "index"
+                                  :description "Top-level form index" :key :index)
+             (clingon:make-option :flag :long-name "end"
+                                  :description "Last top-level form" :key :end)
+             (make-recovery-option))
+   :handler #'source-of/handler))
+
+;;; ============================================================
+;;; Find-forms Command (structural content search)
+;;; ============================================================
+
+(defun find-forms/handler (cmd)
+  (let* ((contains (clingon:getopt cmd :contains))
+         (with-source (clingon:getopt cmd :with-source))
+         (recovery (clingon:getopt cmd :recovery))
+         (text (read-input cmd)))
+    (unless contains
+      (format *error-output* "Error: --contains is required~%")
+      (clingon:exit 1))
+    (format *standard-output* "[")
+    (let ((first t))
+      (dolist (pair (find-forms-containing text contains :recovery recovery))
+        (destructuring-bind (index . node) pair
+          (multiple-value-bind (line col)
+              (cl-toolkit-ast::offset-to-line-col text (node-start node))
+            (unless first (format *standard-output* ","))
+            (setf first nil)
+            (format *standard-output*
+                    "{\"index\":~a,\"name\":\"~a\",\"line\":~a,\"col\":~a~@[,\"source\":\"~a\"~]}"
+                    index
+                    (cl-toolkit-ast::escape-json-string (or (node-form-name node) "?"))
+                    line col
+                    (when with-source
+                      (cl-toolkit-ast::escape-json-string
+                       (node-source-text text node))))))))
+    (format *standard-output* "]~%")))
+
+(defun find-forms/command ()
+  (clingon:make-command
+   :name "find-forms"
+   :usage "(-f FILE | --code CODE) --contains SNIPPET [--with-source]"
+   :description "Find top-level forms whose source contains SNIPPET"
+   :options (list
+             (clingon:make-option :string :long-name "file" :short-name #\f
+                                  :description "File to search" :key :file)
+             (clingon:make-option :string :long-name "code"
+                                  :description "Inline code" :key :code)
+             (clingon:make-option :string :long-name "contains"
+                                  :description "Snippet to search for" :required t
+                                  :key :contains)
+             (clingon:make-option :flag :long-name "with-source"
+                                  :description "Include matching form source in output"
+                                  :key :with-source)
+             (make-recovery-option))
+   :handler #'find-forms/handler))
 
 ;;; ============================================================
 ;;; Help / Version Subcommands
@@ -969,12 +1122,14 @@
    :license "MIT"
    :handler (lambda (cmd) (clingon:print-usage-and-exit cmd t))
    :sub-commands (list
-                   (parse/command)
-                   (find/command)
-                   (extract/command)
-                   (validate/command)
-                   (top-level/command)
-                   (balance/command)
+                    (parse/command)
+                    (find/command)
+                    (find-forms/command)
+                    (extract/command)
+                    (validate/command)
+                    (top-level/command)
+                    (source-of/command)
+                    (balance/command)
                    (format/command)
                    (delete-form/command)
                    (insert-form/command)

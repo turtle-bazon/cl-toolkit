@@ -338,6 +338,57 @@
 ;;; Batch Operations
 ;;; ============================================================
 
+(defun node-source-text (text node)
+  "Return the exact source substring TEXT that NODE spans."
+  (subseq text (node-start node) (node-end node)))
+
+(defun source-of-top-level (text &key name index end recovery)
+  "Return the exact source text of one top-level form in TEXT.
+   Target it by NAME, INDEX, or the last form with END."
+  (let ((node (cond
+                (end
+                 (first (last (list-top-level (parse-for-edit text recovery)))))
+                (name
+                 (find-top-level-by-name text name :recovery recovery))
+                (index
+                 (top-level-node-at text index :recovery recovery)))))
+    (when node
+      (node-source-text text node))))
+
+(defun find-subform-matching (node text snippet)
+  "Find the smallest descendant form of NODE whose source matches SNIPPET.
+   Exact trimmed match is preferred over a contains-match; among equals
+   the smallest span wins. Returns NIL when nothing matches."
+  (let ((exact nil)
+        (contains nil))
+    (labels ((collect (n)
+               (dolist (child (node-children n))
+                 (let* ((raw (node-source-text text child))
+                        (trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) raw)))
+                   (cond
+                     ((string= trimmed snippet)
+                      (push child exact))
+                     ((search snippet raw)
+                      (push child contains)))
+                   (collect child)))))
+      (collect node)
+      (labels ((smallest (nodes)
+                 (first (sort nodes #'<
+                              :key #'(lambda (n) (- (node-end n) (node-start n)))))))
+        (cond
+          (exact (smallest exact))
+          (contains (smallest contains))
+          (t nil))))))
+
+(defun find-forms-containing (text snippet &key recovery)
+  "Return a list of (index node) pairs for top-level forms in TEXT
+   whose source contains SNIPPET."
+  (let ((ast (parse-for-edit text recovery)))
+    (loop for node in (list-top-level ast)
+          for i from 0
+          when (search snippet (node-source-text text node))
+            collect (cons i node))))
+
 (defun top-level-node-at (text index &key recovery)
   "Return the INDEX-th top-level node of TEXT, signaling an error if out of range."
   (let* ((ast (parse-for-edit text recovery))
