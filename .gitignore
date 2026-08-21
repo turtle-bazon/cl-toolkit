@@ -7,3 +7,5 @@ calculator
 *.lx64fsl
 .cache/
 .opencode/
+*.bak
+*.lisp.bak

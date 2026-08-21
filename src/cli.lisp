@@ -76,8 +76,38 @@
   (when file
     (namestring (merge-pathnames file))))
 
+;;; Backup policy for --write. Defaults keep the single rolling FILE.bak.
+(defvar *no-backup* nil)
+(defvar *backup-dir* nil)
+
+(defun backup-path-for (file)
+  "Return the rolling backup pathname for FILE."
+  (concatenate 'string file ".bak"))
+
+(defun timestamped-backup-path (file dir)
+  "Return DIR/STEM.YYYYMMDD-HHMMSS.bak for FILE."
+  (let* ((dir-str (namestring dir))
+         (dir-str (if (char= (char dir-str (1- (length dir-str))) #\/)
+                      dir-str
+                      (concatenate 'string dir-str "/")))
+         (name (pathname-name file))
+         (type (pathname-type file))
+         (stamp (multiple-value-bind (s mi h d mo y)
+                    (get-decoded-time)
+                  (format nil "~4d~2,'0d~2,'0d-~2,'0d~2,'0d~2,'0d" y mo d h mi s))))
+    (concatenate 'string
+                 dir-str
+                 name
+                 "."
+                 stamp
+                 (when type ".")
+                 (or type "lisp")
+                 ".bak")))
+
 (defun write-result-to-file (file result &optional quiet)
-  "Write RESULT source to FILE. Creates FILE.bak backup first.
+  "Write RESULT source to FILE. Backup behavior per policy:
+   default = rolling FILE.bak; --backup-dir adds a timestamped snapshot;
+   --no-backup skips backups entirely.
    Refuses to write when FILE does not exist — --write edits, never creates."
   (let ((source (if (stringp result)
                     result
@@ -86,16 +116,35 @@
       (error "No source in result"))
     (unless (probe-file file)
       (error "Cannot write: file does not exist: ~a" file))
-    (let ((bak (concatenate 'string file ".bak")))
-      (when (probe-file bak)
-        (delete-file bak))
-      (rename-file file bak)
+    ;; Timestamped snapshot captures the PREVIOUS content, before rename.
+    (when *backup-dir*
+      (ensure-directories-exist *backup-dir*)
+      (let ((snapshot (timestamped-backup-path file *backup-dir*)))
+        (with-open-file (in file :direction :input :element-type '(unsigned-byte 8))
+          (with-open-file (out snapshot :direction :output
+                                        :if-exists :supersede
+                                        :element-type '(unsigned-byte 8))
+            (loop for byte = (read-byte in nil nil)
+                  while byte
+                  do (write-byte byte out))))))
+    (let ((bak (backup-path-for file)))
+      (cond (*no-backup*)
+            (t
+             (when (probe-file bak)
+               (delete-file bak))
+             (rename-file file bak)))
       (with-open-file (stream file :direction :output
                                    :if-exists :supersede
                                    :if-does-not-exist :create)
         (write-string source stream))
       (unless quiet
-        (format *error-output* "Wrote ~a (backup: ~a)~%" file bak)))))
+        (cond (*no-backup*
+               (format *error-output* "Wrote ~a (no backup)~%" file))
+              (*backup-dir*
+               (format *error-output* "Wrote ~a (backup: ~a, snapshot in ~a)~%"
+                       file bak *backup-dir*))
+              (t
+               (format *error-output* "Wrote ~a (backup: ~a)~%" file bak)))))))
 
 (defun preview-edit (original-text result file)
   "Show diff preview of changes without writing."
@@ -171,10 +220,17 @@
           (no-validate-input (clingon:getopt ,cmd :no-validate-input))
           (no-validate-result (clingon:getopt ,cmd :no-validate-result))
           (match (clingon:getopt ,cmd :match))
+          (nearest (clingon:getopt ,cmd :nearest))
+          (backup-dir (clingon:getopt ,cmd :backup-dir))
+          (no-backup (clingon:getopt ,cmd :no-backup))
           (file (resolve-file-path (clingon:getopt ,cmd :file)))
           (text (read-input ,cmd))
           (original-text (when file (read-file-to-string file))))
-     ,@body))
+     ;; backup policy for this invocation
+     (let ((*no-backup* no-backup)
+           (*backup-dir* (when backup-dir (resolve-file-path backup-dir))))
+       (declare (special *no-backup* *backup-dir*))
+       ,@body)))
 
 (defun notify-target (verb node text)
   "Report to stderr which form VERB targets: name (when known) plus
@@ -192,6 +248,12 @@
 ;;; ============================================================
 ;;; Shared Options
 ;;; ============================================================
+
+(defun make-nearest-option ()
+  (clingon:make-option :flag
+                       :long-name "nearest"
+                       :description "Allow nearest-match position resolution (destructive ops are exact by default)"
+                       :key :nearest))
 
 (defun make-preview-option ()
   (clingon:make-option :flag :long-name "preview"
@@ -428,7 +490,7 @@
   (clingon:make-command
    :name "top-level"
    :usage "(-f FILE | --code CODE) [--names]"
-   :description "List top-level forms as JSON array, or with --names show form names with indices"
+   :description "List top-level forms as JSON array, or with --names show form names with indices (line/col are 0-based, LSP-style)"
    :options (list
              (clingon:make-option :string :long-name "file" :short-name #\f
                                   :description "File to list" :key :file)
@@ -490,14 +552,19 @@
 ;;; ============================================================
 
 (defun format/handler (cmd)
-  (let* ((indent (clingon:getopt cmd :indent))
-         (write (clingon:getopt cmd :write))
-         (quiet (clingon:getopt cmd :quiet))
-         (file (clingon:getopt cmd :file))
-         (text (read-input cmd))
-         (original-text (when file (read-file-to-string file)))
-         (formatted (format-source text :indent indent)))
-    (deliver-edit-result formatted original-text file nil write quiet)))
+  (with-edit-context (cmd)
+    (let ((canonical (clingon:getopt cmd :canonical))
+          (indent (clingon:getopt cmd :indent)))
+      (handler-case
+          (let ((formatted
+                  (if canonical
+                      (format-source text :indent indent)
+                      (format-minimal text :recovery recovery))))
+            (when (and (not canonical) (not quiet))
+              (format *error-output* "Minimal format (jams + broken-indentation only); pass --canonical for whole-file restyle~%"))
+            (deliver-edit-result formatted original-text file preview write quiet))
+        (error (c)
+          (output-edit-result nil (format nil "~a" c)))))))
 
 (defun format/command ()
   (clingon:make-command
@@ -505,6 +572,9 @@
    :usage "--file FILE | --code CODE"
    :description "Reformat source with consistent indentation"
    :options (list
+             (clingon:make-option :flag :long-name "canonical"
+                                  :description "Whole-file restyle (default is minimal: jams + broken indentation)"
+                                  :key :canonical)
              (clingon:make-option :string :long-name "file" :short-name #\f
                                   :description "File to format" :key :file)
              (clingon:make-option :string :long-name "code"
@@ -514,6 +584,12 @@
                                    :initial-value "  "
                                    :key :indent)
               (make-write-option)
+(clingon:make-option :string :long-name "backup-dir"
+                                   :description "Also save timestamped pre-edit snapshots here"
+                                   :key :backup-dir)
+              (clingon:make-option :flag :long-name "no-backup"
+                                   :description "Skip the rolling .bak backup on write"
+                                   :key :no-backup)
               (make-quiet-option))
     :handler #'format/handler))
 
@@ -544,8 +620,15 @@
                      (delete-node-from-text text node)))
                   ((and line col)
                    (let ((ast (parse-for-edit text recovery)))
-                     (setf target-node (find-form-at ast text line col))
-                     (delete-form-at text line col :recovery recovery)))
+                     (setf target-node
+                           (if nearest
+                               (find-form-at ast text line col)
+                               (find-form-starting-at ast text line col)))
+                     (unless target-node
+                       (if nearest
+                           (error "No form found at line ~a, col ~a" line col)
+                           (error "No form starts exactly at line ~a, col ~a -- pass --nearest for containment match" line col)))
+                     (delete-node-from-text text target-node)))
                   (t
                    (format *error-output* "Error: --end, --name, --index, or --line/--col required~%")
                    (clingon:exit 1)))))
@@ -582,7 +665,14 @@
                                    :description "Top-level form name" :key :name)
               (clingon:make-option :flag :long-name "end"
                                    :description "Delete the last top-level form" :key :end)
+              (make-nearest-option)
               (make-write-option)
+(clingon:make-option :string :long-name "backup-dir"
+                                   :description "Also save timestamped pre-edit snapshots here"
+                                   :key :backup-dir)
+              (clingon:make-option :flag :long-name "no-backup"
+                                   :description "Skip the rolling .bak backup on write"
+                                   :key :no-backup)
               (make-preview-option)
               (make-quiet-option)
                (make-recovery-option)
@@ -635,6 +725,12 @@
              (clingon:make-option :string :long-name "insert" :short-name #\i
                                   :description "Code to insert" :required t :key :insert-code)
               (make-write-option)
+(clingon:make-option :string :long-name "backup-dir"
+                                   :description "Also save timestamped pre-edit snapshots here"
+                                   :key :backup-dir)
+              (clingon:make-option :flag :long-name "no-backup"
+                                   :description "Skip the rolling .bak backup on write"
+                                   :key :no-backup)
               (make-preview-option)
               (make-quiet-option))
    :handler #'insert-at/handler))
@@ -678,6 +774,12 @@
                (clingon:make-option :string :long-name "insert" :short-name #\i
                                     :description "Code to insert" :key :insert-code)
                (make-write-option)
+(clingon:make-option :string :long-name "backup-dir"
+                                    :description "Also save timestamped pre-edit snapshots here"
+                                    :key :backup-dir)
+               (clingon:make-option :flag :long-name "no-backup"
+                                    :description "Skip the rolling .bak backup on write"
+                                    :key :no-backup)
               (make-preview-option)
               (make-quiet-option)
               (make-recovery-option)
@@ -754,6 +856,12 @@
                (clingon:make-option :string :long-name "insert" :short-name #\i
                                     :description "Code to insert" :required t :key :insert-code)
                (make-write-option)
+(clingon:make-option :string :long-name "backup-dir"
+                                    :description "Also save timestamped pre-edit snapshots here"
+                                    :key :backup-dir)
+               (clingon:make-option :flag :long-name "no-backup"
+                                    :description "Skip the rolling .bak backup on write"
+                                    :key :no-backup)
               (make-preview-option)
               (make-quiet-option)
               (make-recovery-option)
@@ -817,8 +925,13 @@
                        (error "Index ~a out of range" index))
                      node))
                   (t
-                   (or (find-form-at (parse-for-edit text recovery) text line col)
-                       (error "No form found at line ~a, col ~a" line col)))))
+                   (let ((ast (parse-for-edit text recovery)))
+                     (or (if nearest
+                             (find-form-at ast text line col)
+                             (find-form-starting-at ast text line col))
+                         (if nearest
+                             (error "No form found at line ~a, col ~a" line col)
+                             (error "No form starts exactly at line ~a, col ~a -- pass --nearest for containment match" line col)))))))
                (target-node (resolve-replace-target text base-node match))
                (result (replace-node-with-code text target-node code pretty)))
           (validate-edited-source result recovery no-validate-result)
@@ -854,6 +967,7 @@
                                   :description "Top-level form name" :key :name)
               (clingon:make-option :flag :long-name "end"
                                    :description "Replace the last top-level form" :key :end)
+              (make-nearest-option)
               (clingon:make-option :string :long-name "match"
                                    :description "Replace smallest subform matching this snippet inside the target form" :key :match)
               (clingon:make-option :string :long-name "replace" :short-name #\r
@@ -862,6 +976,12 @@
                                   :description "Preserve indentation of replaced form"
                                   :key :pretty)
              (make-write-option)
+(clingon:make-option :string :long-name "backup-dir"
+                                  :description "Also save timestamped pre-edit snapshots here"
+                                  :key :backup-dir)
+             (clingon:make-option :flag :long-name "no-backup"
+                                  :description "Skip the rolling .bak backup on write"
+                                  :key :no-backup)
              (make-preview-option)
              (make-quiet-option)
              (make-recovery-option)
@@ -909,6 +1029,12 @@
              (clingon:make-option :integer :long-name "to-col" :short-name #\b
                                   :description "Dest col" :required t :key :to-col)
               (make-write-option)
+(clingon:make-option :string :long-name "backup-dir"
+                                   :description "Also save timestamped pre-edit snapshots here"
+                                   :key :backup-dir)
+              (clingon:make-option :flag :long-name "no-backup"
+                                   :description "Skip the rolling .bak backup on write"
+                                   :key :no-backup)
               (make-preview-option)
               (make-quiet-option)
               (make-recovery-option)
@@ -935,6 +1061,7 @@
                  (edit-plists (mapcar (lambda (e)
                                         (let ((op-str (cdr (assoc :operation e)))
                                               (code (cdr (assoc :code e)))
+                                              (name-val (cdr (assoc :name e)))
                                               (index-val (cdr (assoc :index e)))
                                               (line-val (cdr (assoc :line e)))
                                               (col-val (cdr (assoc :col e))))
@@ -942,6 +1069,7 @@
                                                                (intern (string-upcase op-str) :keyword)
                                                                :replace-index)
                                                 :code code
+                                                :name name-val
                                                 :index index-val
                                                 :line line-val
                                                 :col col-val
@@ -960,9 +1088,11 @@
    :usage "(-f FILE | --code CODE) --edits JSON [--pretty]"
    :description "Apply multiple edits in one command"
    :long-description "Apply a batch of edits from a JSON array. Each edit specifies ~
-                      an :operation (:replace-index, :replace-position, :delete-index, ~
-                      or :insert-after-index), :code, and position (:index or :line/:col). ~
-                      Edits are applied sequentially."
+                       an :operation, :code where applicable, and a target. ~%
+                       Name-based: replace-name, delete-name, insert-after-name (:name key). ~
+                       Index-based: replace-index, delete-index, insert-after-index (:index). ~
+                       Position-based: replace-position (:line/:col). ~
+                       Name edits run first, index edits highest-to-lowest (no shifting)."
    :options (list
              (clingon:make-option :string :long-name "file" :short-name #\f
                                   :description "File to edit" :key :file)
@@ -974,6 +1104,12 @@
                                   :description "Preserve indentation for all replacements"
                                   :key :pretty)
               (make-write-option)
+(clingon:make-option :string :long-name "backup-dir"
+                                   :description "Also save timestamped pre-edit snapshots here"
+                                   :key :backup-dir)
+              (clingon:make-option :flag :long-name "no-backup"
+                                   :description "Skip the rolling .bak backup on write"
+                                   :key :no-backup)
               (make-preview-option)
               (make-quiet-option)
               (make-recovery-option)
@@ -1106,6 +1242,12 @@
              (clingon:make-option :string :long-name "code"
                                   :description "Inline code" :key :code)
               (make-write-option)
+(clingon:make-option :string :long-name "backup-dir"
+                                   :description "Also save timestamped pre-edit snapshots here"
+                                   :key :backup-dir)
+              (clingon:make-option :flag :long-name "no-backup"
+                                   :description "Skip the rolling .bak backup on write"
+                                   :key :no-backup)
               (make-preview-option)
               (make-quiet-option)
               (make-recovery-option))
@@ -1117,7 +1259,7 @@
 
 (defun version/handler (cmd)
   (declare (ignore cmd))
-  (format *standard-output* "cl-toolkit 0.0.1.0~%"))
+  (format *standard-output* "cl-toolkit 0.2.0~%"))
 
 (defun version/command ()
   (clingon:make-command
@@ -1144,7 +1286,7 @@
   "Returns the top-level cl-toolkit command."
   (clingon:make-command
    :name "cl-toolkit"
-   :version "0.0.1.0"
+   :version "0.2.0"
    :description "Lisp code parser for structural analysis and editing"
    :long-description "A CLI tool for parsing, querying, and editing Lisp source code ~
                       using structural AST operations. Supports standard and ~

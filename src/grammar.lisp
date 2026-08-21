@@ -177,12 +177,14 @@
     (let ((val (if (stringp char) char (string char))))
       (make-node :char :value val :start start :end end))))
 
+;;; Dispatch after a leading '#'. The '#' itself is already consumed here,
+;;; so only sub-rules NOT starting with '#' belong in this choice.
+;;; #' / #. / #\ are matched by their own top-level rules in `form'.
 (defrule sharp-dispatch
-    (and "#" (or char-literal vector-form quote-form sharp-quote sharp-dot))
-  (:destructure (sharp dispatch &bounds start end)
+    (and "#" vector-form)
+  (:destructure (sharp vec &bounds start end)
     (declare (ignore sharp))
-    (if (consp dispatch) dispatch
-        (make-node :symbol :name (format nil "#~a" dispatch) :start start :end end))))
+    vec))
 
 ;;; Symbol. May start with a digit only if the whole token is not a
 ;;; valid number — the number rule is ordered before symbol in `form`,

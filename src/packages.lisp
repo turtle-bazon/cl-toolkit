@@ -37,11 +37,12 @@
                 #:esrap-parse-error-result
                 #:result-position
                 #:successful-parse-production)
+  ;; NOTE: analyze-balance / format-source are implemented in CL-TOOLKIT
+  ;; (parser.lisp); exporting them here too created symbol clashes for
+  ;; packages :using both. Do not re-add them to this export list.
   (:export
    #:parse-lisp-source
-   #:parse-with-recovery
-   #:analyze-balance
-   #:format-source))
+   #:parse-with-recovery))
 
 (defpackage #:cl-toolkit
   (:use #:cl #:clingon)
@@ -83,6 +84,15 @@
     #:find-top-level-by-name
     #:delete-node-from-text
     #:move-form
+   #:source-of-top-level
+   #:find-subform-matching
+   #:find-forms-containing
+   #:node-source-text
+   #:split-jammed-top-level
+   #:splice-replacement
+   #:top-level-node-at
+   #:apply-batch-edits
+   #:apply-single-edit
    #:apply-edit
    #:cl-toolkit-main
    #:main))

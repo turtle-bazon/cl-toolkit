@@ -102,6 +102,28 @@
 
 ;;; --- Position-based queries ---
 
+(defun find-form-starting-at (ast text line col)
+  "Find the smallest form whose source STARTS exactly at LINE, COL.
+   Returns NIL when nothing starts there — no nearest-match guessing.
+   Destructive operations default to this so a wrong position fails
+   loudly instead of silently editing an adjacent form."
+  (let* ((target-offset (cl-toolkit-ast:offset-to-line-col-inverse text line col))
+         (best nil))
+    (labels ((walk (node)
+               (when (and (nodep node)
+                          (node-start node) (node-end node)
+                          (= target-offset (node-start node)))
+                 (when (or (null best)
+                           (< (- (node-end node) (node-start node))
+                              (- (node-end best) (node-start best))))
+                   (setf best node)))
+               (dolist (child (node-children node))
+                 (walk child))))
+      ;; never return the root itself
+      (dolist (top (list-top-level ast))
+        (walk top))
+      best)))
+
 (defun find-form-at (ast text line col)
   "Find the form to operate on at the given LINE and COL (0-indexed).
    Finds the smallest form that contains the target offset and whose start
@@ -321,14 +343,37 @@
                    (when (< line-end (length code))
                      (write-char #\Newline out)))))))
 
+(defun indent-continuation-lines (code additional-indent)
+  "Add ADDITIONAL-INDENT spaces to every line of CODE except the first.
+   The first line keeps its own leading whitespace — the splice point
+   already accounts for the original form's base indentation."
+  (if (<= additional-indent 0)
+      code
+      (let ((prefix (make-string additional-indent :initial-element #\Space)))
+        (with-output-to-string (out)
+          (loop for line-start = 0
+                then (if (< line-end (length code))
+                         (1+ line-end)
+                         nil)
+                while line-start
+                for line-end = (or (position #\Newline code :start line-start)
+                                   (length code))
+                do (unless (zerop line-start)
+                     (write-string prefix out))
+                   (write-string (subseq code line-start line-end) out)
+                   (when (< line-end (length code))
+                     (write-char #\Newline out)))))))
+
 (defun replace-form-pretty (text node new-code)
   "Replace NODE with NEW-CODE, preserving original indentation.
-   Detects the indentation of the original form and applies it to
-   the new code's first line and adjusts subsequent lines relative to that."
+   The replacement's first line lands exactly where the original started;
+   continuation lines are shifted by the original form's base indent so
+   relative structure survives. Splicing at NODE-START (after the original
+   leading whitespace) plus first-line-shift would double-indent."
   (let* ((start (node-start node))
          (end (node-end node))
          (indent (detect-form-indentation text node))
-         (indented-code (indent-code-by new-code indent)))
+         (indented-code (indent-continuation-lines new-code indent)))
     (concatenate 'string
                  (subseq text 0 start)
                  indented-code
@@ -426,6 +471,33 @@
                new-code
                (subseq text (node-end node))))
 
+(defun top-level-node-by-name (text edit &optional recovery)
+  "Resolve the :name of EDIT to a top-level node or signal."
+  (or (find-top-level-by-name text (getf edit :name) :recovery recovery)
+      (error "No top-level form named '~a'" (getf edit :name))))
+
+(defun edit-replace-name (text edit &optional recovery)
+  "Apply a :replace-name EDIT to TEXT."
+  (let ((node (top-level-node-by-name text edit recovery)))
+    (if (getf edit :pretty)
+        (replace-form-pretty text node (getf edit :code))
+        (splice-replacement text node (getf edit :code)))))
+
+(defun edit-delete-name (text edit &optional recovery)
+  "Apply a :delete-name EDIT to TEXT."
+  (delete-node-from-text text (top-level-node-by-name text edit recovery)))
+
+(defun edit-insert-after-name (text edit &optional recovery)
+  "Apply an :insert-after-name EDIT to TEXT (newline-separated)."
+  (let* ((node (top-level-node-by-name text edit recovery))
+         (end (node-end node))
+         (code (getf edit :code)))
+    (concatenate 'string
+                 (subseq text 0 end)
+                 (string #\Newline)
+                 code
+                 (subseq text end))))
+
 (defun edit-replace-index (text edit &optional recovery)
   "Apply a :replace-index EDIT to TEXT."
   (let ((node (top-level-node-at text (getf edit :index) :recovery recovery)))
@@ -459,9 +531,12 @@
 
 (defun apply-single-edit (text edit &key recovery)
   "Apply a single EDIT plist to TEXT.
-   EDIT is a plist with :operation, :code, and either :index or :line/:col.
-   Returns the modified text."
+   EDIT is a plist with :operation, :code, and either :name, :index,
+   or :line/:col. Returns the modified text."
   (case (getf edit :operation)
+    (:replace-name (edit-replace-name text edit recovery))
+    (:delete-name (edit-delete-name text edit recovery))
+    (:insert-after-name (edit-insert-after-name text edit recovery))
     (:replace-index (edit-replace-index text edit recovery))
     (:replace-position (edit-replace-position text edit recovery))
     (:delete-index (edit-delete-index text edit recovery))
@@ -470,16 +545,18 @@
 
 (defun apply-batch-edits (text edits &key recovery)
   "Apply a list of EDIT plists to TEXT.
-   Sorts index-based edits from highest to lowest to prevent index shifting.
-   Position-based edits (line/col) are applied after index edits.
-   Returns the final modified text."
-  (let* ((index-edits (remove-if-not (lambda (e) (getf e :index)) edits))
-         (position-edits (remove-if (lambda (e) (getf e :index)) edits))
-         (sorted-index (sort (copy-list index-edits) (lambda (a b)
-                                                      (> (getf a :index) (getf b :index))))))
+   Order: name-based edits first (self-describing), then index-based
+   edits from highest to lowest (prevents index shifting), then
+   position-based edits. Returns the final modified text."
+  (let* ((name-edits (remove-if-not (lambda (e) (getf e :name)) edits))
+         (index-edits (remove-if (lambda (e) (getf e :name)) edits))
+         (with-index (remove-if-not (lambda (e) (getf e :index)) index-edits))
+         (position-edits (remove-if (lambda (e) (getf e :index)) index-edits))
+         (sorted-index (sort (copy-list with-index)
+                             (lambda (a b) (> (getf a :index) (getf b :index))))))
     (reduce (lambda (current-text edit)
               (apply-single-edit current-text edit :recovery recovery))
-            (append sorted-index position-edits)
+            (append name-edits sorted-index position-edits)
             :initial-value text)))
 
 (defun insert-form-at (text line col new-code &key recovery)
@@ -697,6 +774,52 @@
                        (make-string spacing-nls :initial-element #\Newline)
                        indented-form
                        (subseq deleted-text-str dest-end)))))))
+(defun form-body-broken-p (text node)
+  "Heuristic: T when the form looks structurally unformatted —
+   either a continuation line starts at column 0 with an opening paren
+   or atom, or the whole form sits on one line with deep nesting that
+   formatting would expand."
+  (let* ((src (node-source-text text node))
+         (lines (split-string-on-newlines src)))
+    (if (rest lines)
+        (loop for line in (rest lines)
+              thereis (and (> (length (string-trim '(#\Space #\Tab) line)) 0)
+                           (let ((ch (char line 0)))
+                             (or (char= ch #\()
+                                 (alphanumericp ch)))))
+        ;; single line: >= 3 open parens means deep inline nesting
+        (>= (count #\( src) 3))))
+
+(defun split-string-on-newlines (string)
+  "Split STRING on #\Newline, keeping empty segments."
+  (let ((parts nil)
+        (start 0))
+    (loop for pos = (position #\Newline string :start start)
+          do (push (subseq string start (or pos (length string))) parts)
+             (if pos
+                 (setf start (1+ pos))
+                 (return))
+          finally (return (nreverse parts)))))
+
+(defun format-minimal (text &key recovery)
+  "Minimal structural repair: split jammed top-level forms, then
+   reformat only those multi-line top-level forms whose continuation
+   lines are unindented. Existing valid indentation is left untouched.
+   NOTE: fully-single-line nested forms are flagged by
+   FORM-BODY-BROKEN-P but left as-is — FORMAT-SOURCE reindents at
+   existing newlines only; expanding them needs a real pretty-printer."
+  (let* ((split (split-jammed-top-level text :recovery recovery))
+         (ast (parse-for-edit split recovery))
+         (result split))
+    ;; splice from the back so earlier offsets stay valid
+    (dolist (node (reverse (list-top-level ast)) result)
+      (when (form-body-broken-p split node)
+        (setf result
+              (concatenate 'string
+                           (subseq result 0 (node-start node))
+                           (format-source (node-source-text split node))
+                           (subseq result (node-end node))))))))
+
 ;;; ============================================================
 ;;; Balance Analysis
 ;;; ============================================================
