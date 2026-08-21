@@ -61,7 +61,7 @@ export default tool({
   description: "Parse, validate, and edit Common Lisp code using cl-toolkit (PEG parser with error recovery)",
   args: {
     command: tool.schema
-      .enum(["parse", "validate", "find", "extract", "top-level", "source-of", "find-forms", "delete-form", "insert-form", "append-form", "replace-form", "move-form", "insert", "balance", "format", "batch-replace"])
+      .enum(["parse", "validate", "find", "extract", "top-level", "source-of", "find-forms", "delete-form", "insert-form", "append-form", "replace-form", "move-form", "insert", "balance", "format", "batch-replace", "split-forms"])
       .describe("Command to execute"),
     code: tool.schema.string().optional().describe("Inline Lisp code to parse/insert/replace"),
     filePath: tool.schema.string().optional().describe("Path to .lisp file"),
@@ -271,6 +271,14 @@ export default tool({
         return JSON.stringify({ error: "find-forms command requires contains (snippet)" })
       }
       cmdArgs.push("--file", absolutePath!, "--contains", contains)
+    } else if (command === "split-forms") {
+      if (!absolutePath) {
+        return JSON.stringify({ error: "split-forms command requires filePath" })
+      }
+      if (write) cmdArgs.push("--write")
+      if (write) cmdArgs.push("--quiet")
+      if (preview) cmdArgs.push("--preview")
+      cmdArgs.push("--file", absolutePath)
     } else if (command === "balance") {
       if (absolutePath) {
         cmdArgs.push("--file", absolutePath)
@@ -314,7 +322,7 @@ export default tool({
       }
 
       // When --write is used with modification commands, CLI returns unified diff directly
-      if (write && ["delete-form", "insert-form", "append-form", "replace-form", "move-form", "insert", "format", "batch-replace"].includes(command)) {
+      if (write && ["delete-form", "insert-form", "append-form", "replace-form", "move-form", "insert", "format", "batch-replace", "split-forms"].includes(command)) {
         if (stdout.startsWith("---") && absolutePath) {
           // Count additions and deletions from diff
           const additions = (stdout.match(/^\+/gm) || []).length
@@ -346,7 +354,7 @@ export default tool({
         // Plain text output from modification command without --write:
         // the CLI printed the full modified source. Return it verbatim —
         // generating diffs client-side produced corrupt previews.
-        if (absolutePath && ["delete-form", "insert-form", "append-form", "replace-form", "move-form", "insert", "batch-replace"].includes(command)) {
+        if (absolutePath && ["delete-form", "insert-form", "append-form", "replace-form", "move-form", "insert", "batch-replace", "split-forms"].includes(command)) {
           return JSON.stringify({
             success: true,
             source: stdout,

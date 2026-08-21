@@ -338,6 +338,28 @@
 ;;; Batch Operations
 ;;; ============================================================
 
+(defun split-jammed-top-level (text &key recovery)
+  "Insert a newline between any two adjacent top-level forms that share
+   a line. Purely additive whitespace repair — no reindentation, so the
+   diff stays minimal even on files where full `format' would rewrite
+   everything."
+  (let* ((ast (parse-for-edit text recovery))
+         (forms (list-top-level ast))
+         (positions '()))
+    (loop for (a b) on forms
+          while b
+          do (let ((gap (subseq text (node-end a) (node-start b))))
+               (unless (find #\Newline gap)
+                 (push (node-start b) positions))))
+    (let ((result text))
+      ;; splice from the back so earlier offsets stay valid
+      (dolist (pos (sort positions #'>))
+        (setf result (concatenate 'string
+                                  (subseq result 0 pos)
+                                  (string #\Newline)
+                                  (subseq result pos))))
+      result)))
+
 (defun node-source-text (text node)
   "Return the exact source substring TEXT that NODE spans."
   (subseq text (node-start node) (node-end node)))

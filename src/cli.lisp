@@ -1081,6 +1081,37 @@
    :handler #'find-forms/handler))
 
 ;;; ============================================================
+;;; Split-forms Command (whitespace-jam repair)
+;;; ============================================================
+
+(defun split-forms/handler (cmd)
+  (with-edit-context (cmd)
+    (handler-case
+        (let ((result (split-jammed-top-level text :recovery recovery)))
+          (deliver-edit-result result original-text file preview write quiet))
+      (error (c)
+        (output-edit-result nil (format nil "~a" c))))))
+
+(defun split-forms/command ()
+  (clingon:make-command
+   :name "split-forms"
+   :usage "(-f FILE | --code CODE)"
+   :description "Insert newlines between top-level forms jammed on one line"
+   :long-description "Minimal whitespace repair: adds a newline between any
+   two adjacent top-level forms sharing a line. Unlike format, never
+   reindents anything else — the diff touches only jammed boundaries."
+   :options (list
+             (clingon:make-option :string :long-name "file" :short-name #\f
+                                  :description "File to edit" :key :file)
+             (clingon:make-option :string :long-name "code"
+                                  :description "Inline code" :key :code)
+              (make-write-option)
+              (make-preview-option)
+              (make-quiet-option)
+              (make-recovery-option))
+   :handler #'split-forms/handler))
+
+;;; ============================================================
 ;;; Help / Version Subcommands
 ;;; ============================================================
 
@@ -1137,7 +1168,8 @@
                     (replace-form/command)
                     (batch-replace/command)
                     (insert-at/command)
-                   (move-form/command)
+                    (split-forms/command)
+                    (move-form/command)
                    (help/command)
                    (version/command))))
 
