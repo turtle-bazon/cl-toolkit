@@ -283,6 +283,30 @@
 ;;; Public API
 ;;; ============================================================
 
+(defun first-line (string)
+  "Return STRING up to its first newline."
+  (let ((nl (position #\Newline string)))
+    (if nl (subseq string 0 nl) string)))
+
+(defun extract-error-location (report)
+  "Return the '(Line L, Column C, Position N)' fragment of an esrap
+   error REPORT, or NIL if absent."
+  (let ((idx (search "(Line " report)))
+    (when idx
+      (let ((close (position #\) report :start idx)))
+        (when close
+          (subseq report idx (1+ close)))))))
+
+(defun compact-parse-error (condition)
+  "One-line summary of an esrap parse error.
+   Esrap's full report enumerates every grammar alternative across many
+   lines; keep only the location so CLI output stays TUI-friendly."
+  (let* ((report (princ-to-string condition))
+         (loc (extract-error-location report)))
+    (if loc
+        (format nil "Syntax error at ~a" (subseq loc 1 (1- (length loc))))
+        (first-line report))))
+
 (defun parse-lisp-source (text &optional (start 0) end)
   "Parse TEXT as Lisp source code. Returns AST root node.
    START and END are optional bounds into TEXT."
@@ -312,7 +336,7 @@
                 ast)))
       (esrap:esrap-parse-error (c)
         (make-node :error
-                   :value (format nil "~a" c)
+                   :value (compact-parse-error c)
                    :start 0
                    :end text-end)))))
 
