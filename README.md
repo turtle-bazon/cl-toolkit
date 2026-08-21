@@ -314,7 +314,10 @@ cat > ~/.config/opencode/opencode.json << EOF
 EOF
 ```
 
-Binary is built automatically on first use.
+The binary is **not** built automatically — run `make build` in the repo
+first (requires SBCL + Quicklisp). The plugin checks for the binary at
+call time and reports the exact command to run if missing. Re-run
+`setup.sh` after updating the repo so the plugin snapshot stays current.
 
 ### Per-Project Setup
 
