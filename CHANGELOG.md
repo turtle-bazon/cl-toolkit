@@ -3,6 +3,40 @@
 All notable changes to cl-toolkit. During 0.x, breaking changes are
 marked `BREAKING:`.
 
+## [0.3.0] - 2026-08-22
+
+### BREAKING
+
+- **Replacement-shape guard**: replacing one top-level form with text
+  containing several top-level forms now fails unless
+  `--allow-multi-forms` is passed. Closes the whole-file-as-replacement
+  corruption vector (stray in-package x4).
+
+### Added — analysis layer (verification & surgery planning)
+
+- `check-anchor -f F --text S` → `{count, first-offset, line, col}`;
+  exit 1 unless the anchor is unique (safe-edit precondition).
+- `patch-span --line L --col C --old T --new T` → byte-exact anchor
+  verification + reader-aware **net depth-delta guard**: refuses ±≠0
+  substitutions (scope-shifting wraps/restructures) unless
+  `--allow-shift`. This is the direct antidote to the extra-closer-at-EOF
+  corruption class.
+- `balance --expect-delta N` — assert a fragment's net depth
+  contribution using the real parser (char literals, strings, comments).
+- `diff-forms -f F --name X [--against-file G]` — structural add/remove
+  summary of direct children; immune to re-indentation noise.
+- `lint` — flags duplicate identical top-level forms.
+- `replace-form --match-exact` — never escalate to contains-match;
+  fails with guidance instead.
+- Fuzzy `--match` fallbacks now announce themselves:
+  `Replacing in form (fuzzy contains-match) ...`.
+- `--preview` prints stats line (old/new line counts) to stderr.
+
+### Notes
+
+- Subform deletion shipped in 0.2.1 as `--delete-match` (the gap report's
+  P3 request predates it).
+
 ## [0.2.1] - 2026-08-22
 
 ### Added

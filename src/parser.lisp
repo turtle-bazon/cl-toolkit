@@ -447,6 +447,51 @@
           (contains (smallest contains))
           (t nil))))))
 
+(defun count-text-occurrences (text snippet)
+  "Return (values count first-offset) of literal SNIPPET occurrences in TEXT."
+  (let ((count 0) (first-offset nil) (pos 0))
+    (loop while (and snippet (> (length snippet) 0))
+          for found = (search snippet text :start2 pos)
+          while found
+          do (incf count)
+             (unless first-offset (setf first-offset found))
+             (setf pos (+ found (max 1 (length snippet)))))
+    (values count (or first-offset -1))))
+
+(defun find-subform-matching-exact (node text snippet)
+  "Smallest descendant of NODE whose trimmed source equals SNIPPET.
+   Like FIND-SUBFORM-MATCHING but never falls back to contains-matches —
+   anchor verification must not escalate silently."
+  (let ((snippet (string-trim '(#\Space #\Tab #\Newline #\Return) snippet))
+        (exact nil))
+    (labels ((collect (n)
+               (dolist (child (node-children n))
+                 (when (string= (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                             (node-source-text text child))
+                                snippet)
+                   (push child exact))
+                 (collect child))))
+      (collect node)
+      (when exact
+        (first (sort exact #'< :key #'(lambda (n) (- (node-end n) (node-start n)))))))))
+
+(defun net-depth-delta (old-text new-text)
+  "Net paren-depth change of replacing OLD-TEXT with NEW-TEXT, using the
+   reader-aware balance scanner (char literals, strings, comments count
+   correctly). Zero means the replacement preserves scope structure."
+  (- (getf (analyze-balance new-text) :final-depth)
+     (getf (analyze-balance old-text) :final-depth)))
+
+(defun duplicate-top-level-forms (text &key recovery)
+  "Return groups ((offset1 offset2 ...) ...) of top-level forms with
+   byte-identical source — the stray-(in-package x4) smell."
+  (let* ((ast (parse-for-edit text recovery))
+         (by-source (make-hash-table :test #'equal)))
+    (dolist (node (list-top-level ast))
+      (push (node-start node) (gethash (node-source-text text node) by-source nil)))
+    (loop for offsets being the hash-values of by-source
+          when (> (length offsets) 1)
+            collect (nreverse offsets))))
 (defun find-forms-containing (text snippet &key recovery)
   "Return a list of (index node) pairs for top-level forms in TEXT
    whose source contains SNIPPET."

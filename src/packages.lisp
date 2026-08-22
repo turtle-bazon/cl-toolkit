@@ -87,6 +87,10 @@
    #:source-of-top-level
    #:find-subform-matching
    #:find-forms-containing
+   #:count-text-occurrences
+   #:find-subform-matching-exact
+   #:net-depth-delta
+   #:duplicate-top-level-forms
    #:node-source-text
    #:split-jammed-top-level
    #:splice-replacement

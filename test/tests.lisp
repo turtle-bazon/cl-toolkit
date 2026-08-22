@@ -269,3 +269,42 @@
          (result (replace-form-pretty text node (format nil "(defun bar ()~%  2)"))))
     ;; first line keeps original base indent of two spaces
     (is (string= "  (defun bar" (subseq result 0 12)))))
+
+;;; 0.3.0 analysis-layer regressions
+
+(test count-text-occurrences-basic
+  (multiple-value-bind (count off)
+      (count-text-occurrences "(a)(a)(b)" "(a)")
+    (is (= 2 count))
+    (is (= 0 off))))
+
+(test count-text-occurrences-none
+  (multiple-value-bind (count off)
+      (count-text-occurrences "(a)" "(zzz)")
+    (is (= 0 count))
+    (is (= -1 off))))
+
+(test net-depth-delta-balanced
+  (is (= 0 (net-depth-delta "(a)" "(b)"))))
+
+(test net-depth-delta-shift
+  (is (= 1 (net-depth-delta "(a)" "(+ a"))))
+
+(test duplicate-top-level-forms-detects
+  (let* ((text "(in-package :cl)
+(defun a () 1)
+(in-package :cl)")
+         (groups (duplicate-top-level-forms text)))
+    (is (= 1 (length groups)))
+    (is (= 2 (length (first groups))))))
+
+(test duplicate-top-level-forms-clean
+  (is (null (duplicate-top-level-forms "(defun a () 1)
+(defun b () 2)"))))
+
+(test find-subform-matching-exact-no-fuzzy
+  ;; contains-match would hit; exact must refuse
+  (let* ((text "(defun f () (g (h 123)))")
+         (top (first (list-top-level (parse-lisp-source text)))))
+    (is (null (find-subform-matching-exact top text "(h")))
+    (is (not (null (find-subform-matching-exact top text "(h 123)"))))))

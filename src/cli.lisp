@@ -162,6 +162,13 @@
    PREVIEW and WRITE require FILE; exits with an error otherwise."
   (cond
     (preview
+     (when file
+       (let ((old-l (count #\Newline original-text))
+             (new-l (count #\Newline result)))
+         (format *error-output* "Preview stats: ~a lines -> ~a lines (~s~a)~%"
+                 old-l new-l
+                 (if (string= original-text result) "no changes, " "")
+                 (length result))))
      (if file
          (preview-edit original-text result file)
          (progn
@@ -222,6 +229,8 @@
           (match (clingon:getopt ,cmd :match))
           (nearest (clingon:getopt ,cmd :nearest))
           (contains-arg (clingon:getopt ,cmd :contains))
+          (match-exact (clingon:getopt ,cmd :match-exact))
+          (allow-multi-forms (clingon:getopt ,cmd :allow-multi-forms))
           (backup-dir (clingon:getopt ,cmd :backup-dir))
           (no-backup (clingon:getopt ,cmd :no-backup))
           (file (resolve-file-path (clingon:getopt ,cmd :file)))
@@ -542,7 +551,17 @@
 
 (defun balance/handler (cmd)
   (let* ((text (read-input cmd))
+         (expect-delta (clingon:getopt cmd :expect-delta))
          (result (analyze-balance text)))
+    ;; --expect-delta N: assert the fragment's net depth contribution.
+    ;; A balanced whole file has delta 0; a wrap/insertion fragment
+    ;; fragment carries its own nonzero delta (e.g. +1 for one opener).
+    (when expect-delta
+      (unless (= (getf result :final-depth) expect-delta)
+        (format *error-output*
+                "Depth check failed: final depth ~a but --expect-delta ~a~%"
+                (getf result :final-depth) expect-delta)
+        (clingon:exit 1)))
     (format *standard-output* "{")
     (format *standard-output* "\"max_depth\":~a" (getf result :max-depth))
     (format *standard-output* ",\"final_depth\":~a" (getf result :final-depth))
@@ -579,7 +598,10 @@
              (clingon:make-option :string :long-name "file" :short-name #\f
                                   :description "File to analyze" :key :file)
              (clingon:make-option :string :long-name "code"
-                                  :description "Inline code to analyze" :key :code))
+                                  :description "Inline code to analyze" :key :code)
+             (clingon:make-option :integer :long-name "expect-delta"
+                                  :description "Fail unless the text's net depth contribution equals N (fragment wrap checks)"
+                                  :key :expect-delta))
    :handler #'balance/handler))
 
 ;;; ============================================================
@@ -930,13 +952,25 @@
                      code
                      (subseq text end)))))
 
-(defun resolve-replace-target (text node match)
+(defun resolve-replace-target (text node match &key match-exact)
   "Narrow NODE to its smallest descendant whose source matches MATCH.
-   With a nil MATCH, returns NODE unchanged."
-  (if match
-      (or (find-subform-matching node text match)
-          (error "No subform matching ~s inside target form (matching is literal source text: #'x will not match (function x))" match))
-      node))
+   Returns (values node fuzzy-p); FUZZY-P is T when a contains-match was
+   used. With a nil MATCH returns NODE unchanged.
+   MATCH-EXACT forbids the contains fallback and fails with guidance
+   instead of escalating silently."
+  (if (null match)
+      (values node nil)
+      (let ((exact (find-subform-matching-exact node text match)))
+        (cond
+          (exact (values exact nil))
+          (match-exact
+           (error "No exact subform matching ~s inside target form (--match-exact forbids contains-fallback). Matching is literal source text: #'x will not match (function x)"
+                  match))
+          ((find-subform-matching node text match)
+           (values (find-subform-matching node text match) t))
+          (t
+           (error "No subform matching ~s inside target form. Matching is literal source text: #'x will not match (function x)"
+                  match))))))
 
 (defun replace/handler (cmd)
   (with-edit-context (cmd :code-key :replace-code)
@@ -987,12 +1021,31 @@
                          (if nearest
                              (error "No form found at line ~a, col ~a" line col)
                              (error "No form starts exactly at line ~a, col ~a -- pass --nearest for containment match" line col)))))))
-               (target-node (resolve-replace-target text base-node match))
+               (resolved (multiple-value-list
+                          (resolve-replace-target text base-node match :match-exact match-exact)))
+               (target-node (first resolved))
+               (fuzzy-p (second resolved))
                (result (replace-node-with-code text target-node code pretty)))
+          ;; Replacement-shape guard: replacing ONE top-level form with
+          ;; several silently multiplies structure (the stray in-package x4
+          ;; failure). Multi-form replacement stays available behind the flag.
+          (let ((repl-count (length (ignore-errors
+                                     (list-top-level (parse-for-edit code recovery))))))
+            (when (and repl-count
+                       (> repl-count 1)
+                       (not allow-multi-forms)
+                       ;; only whole-top-level targets carry the risk
+                       (= (count-if (lambda (n) (= (node-start n) (node-start base-node)))
+                                    (list-top-level (parse-for-edit text recovery)))
+                          1))
+              (error "Refusing: replacement contains ~a top-level forms but replaces one. ~
+                      Pass --allow-multi-forms if splitting is intended."
+                     repl-count)))
           (validate-edited-source result recovery no-validate-result)
           (when target-node
             (notify-target
            (cond ((and match (stringp code) (string= code "")) "Deleting in")
+                 ((and match fuzzy-p) "Replacing in form (fuzzy contains-match)")
                  (match "Replacing in")
                  (t "Replacing"))
            target-node text))
@@ -1032,6 +1085,12 @@
                                    :key :contains)
               (clingon:make-option :string :long-name "match"
                                    :description "Replace smallest subform matching this snippet inside the target form" :key :match)
+              (clingon:make-option :flag :long-name "match-exact"
+                                   :description "--match must match exactly; never fall back to contains-match"
+                                   :key :match-exact)
+              (clingon:make-option :flag :long-name "allow-multi-forms"
+                                   :description "Permit replacing one top-level form with several"
+                                   :key :allow-multi-forms)
               (clingon:make-option :flag :long-name "delete-match"
                                    :description "With --match: remove the matched subform instead of replacing"
                                    :key :delete-match)
@@ -1319,12 +1378,240 @@
    :handler #'split-forms/handler))
 
 ;;; ============================================================
+;;; ============================================================
+;;; Check-anchor Command (occurrence verification)
+;;; ============================================================
+
+(defun check-anchor/handler (cmd)
+  (let* ((text (read-input cmd))
+         (anchor (clingon:getopt cmd :text)))
+    (unless (and anchor (> (length anchor) 0))
+      (format *error-output* "Error: --text is required~%")
+      (clingon:exit 1))
+    (multiple-value-bind (count first-offset)
+        (count-text-occurrences text anchor)
+      (multiple-value-bind (line col)
+          (if (plusp count)
+              (cl-toolkit-ast::offset-to-line-col text first-offset)
+              (values -1 -1))
+        (format *standard-output*
+                "{\"count\":~a,\"first-offset\":~a,\"line\":~a,\"col\":~a}~%"
+                count first-offset line col))
+      ;; exit 1 when the anchor is not unique — the safe-edit precondition
+      (unless (= count 1)
+        (clingon:exit 1)))))
+
+(defun check-anchor/command ()
+  (clingon:make-command
+   :name "check-anchor"
+   :usage "(-f FILE | --code CODE) --text SNIPPET"
+   :description "Verify a snippet occurs exactly once (safe-edit precondition)"
+   :options (list
+             (clingon:make-option :string :long-name "file" :short-name #\f
+                                  :description "File to search" :key :file)
+             (clingon:make-option :string :long-name "code"
+                                  :description "Inline code" :key :code)
+             (clingon:make-option :string :long-name "text"
+                                  :description "Literal snippet to count" :required t
+                                  :key :text))
+   :handler #'check-anchor/handler))
+
+;;; ============================================================
+;;; Patch-span Command (verified byte-level substitution)
+;;; ============================================================
+
+(defun patch-span/handler (cmd)
+  (with-edit-context (cmd :code-key :new-text)
+    (let ((old-text (clingon:getopt cmd :old-text))
+          (new-text code)
+          (allow-shift (clingon:getopt cmd :allow-shift)))
+      (unless (and line col old-text new-text)
+        (format *error-output* "Error: --line, --col, --old, --new are required~%")
+        (clingon:exit 1))
+      (handler-case
+          (let* ((offset (cl-toolkit-ast::offset-to-line-col-inverse text line col))
+                 ;; byte-exact precondition: OLD must sit exactly at the position
+                 (actual (subseq text offset
+                                 (min (length text)
+                                      (+ offset (length old-text))))))
+            (unless (string= actual old-text)
+              (format *error-output*
+                      "Anchor mismatch at line ~a, col ~a~%  expected: ~s~%  found:    ~s~%"
+                      line col old-text actual)
+              (clingon:exit 1))
+            (let ((delta (net-depth-delta old-text new-text)))
+              (unless (zerop delta)
+                (if allow-shift
+                    (format *error-output* "Warning: net depth delta ~a (structure shifts)~%" delta)
+                    (progn
+                      (format *error-output*
+                              "Refusing: net depth delta ~a -- closers would shift scope. ~
+                               Pass --allow-shift if this wrap/restructure is intended.~%"
+                              delta)
+                      (clingon:exit 1))))
+              (let ((result (concatenate 'string
+                                         (subseq text 0 offset)
+                                         new-text
+                                         (subseq text (+ offset (length old-text))))))
+                (validate-edited-source result recovery no-validate-result)
+                (when (not quiet)
+                  (format *error-output* "Patching [line ~a, col ~a] delta=~a~%"
+                          line col delta))
+                (deliver-edit-result result original-text file preview write quiet))))
+        (error (c)
+          (output-edit-result nil (format nil "~a" c)))))))
+
+(defun patch-span/command ()
+  (clingon:make-command
+   :name "patch-span"
+   :usage "(-f FILE | --code CODE) --line L --col C --old TXT --new TXT [--allow-shift]"
+   :description "Byte-verified text substitution with net depth-delta guard"
+   :long-description "Replaces an exact text span, but only after verifying: ~
+                       (1) OLD appears byte-exactly at LINE/COL; ~
+                       (2) the substitution does not change net paren depth ~
+                       (reader-aware: strings, chars, comments respected). ~
+                       Depth-shifting wraps/restructures need --allow-shift."
+   :options (list
+             (clingon:make-option :string :long-name "file" :short-name #\f
+                                  :description "File to patch" :key :file)
+             (clingon:make-option :string :long-name "code"
+                                  :description "Inline code" :key :code)
+             (clingon:make-option :integer :long-name "line" :short-name #\l
+                                  :description "Line number (0-based)" :key :line)
+             (clingon:make-option :integer :long-name "col" :short-name #\c
+                                  :description "Column number (0-based)" :key :col)
+             (clingon:make-option :string :long-name "old"
+                                  :description "Exact existing text to replace" :key :old-text)
+             (clingon:make-option :string :long-name "new"
+                                  :description "Replacement text" :key :new-text)
+             (clingon:make-option :flag :long-name "allow-shift"
+                                  :description "Permit nonzero net depth delta"
+                                  :key :allow-shift)
+              (make-write-option)
+              (make-preview-option)
+              (clingon:make-option :string :long-name "backup-dir"
+                                  :description "Also save timestamped pre-edit snapshots here"
+                                   :key :backup-dir)
+              (clingon:make-option :flag :long-name "no-backup"
+                                   :description "Skip the rolling .bak backup on write"
+                                   :key :no-backup)
+              (make-quiet-option)
+              (make-recovery-option)
+              (clingon:make-option :flag :long-name "no-validate-result"
+                                   :description "Skip result validation"
+                                   :key :no-validate-result))
+   :handler #'patch-span/handler))
+
+;;; ============================================================
+;;; Lint Command (duplicate form detection)
+;;; ============================================================
+
+(defun lint/handler (cmd)
+  (let* ((recovery (clingon:getopt cmd :recovery))
+         (text (read-input cmd))
+         (groups (duplicate-top-level-forms text :recovery recovery)))
+    (if groups
+        (progn
+          (dolist (g groups)
+            (format *error-output* "Duplicate top-level forms at offsets ~{~a~^, ~}:~%" g)
+            (dolist (off g)
+              (multiple-value-bind (l c)
+                  (cl-toolkit-ast::offset-to-line-col text off)
+                (format *error-output* "  [line ~a, col ~a]~%" l c))))
+          (clingon:exit 1))
+        (format *standard-output* "No duplicate top-level forms.~%"))))
+
+(defun lint/command ()
+  (clingon:make-command
+   :name "lint"
+   :usage "(-f FILE | --code CODE)"
+   :description "Flag duplicate identical top-level forms"
+   :options (list
+             (clingon:make-option :string :long-name "file" :short-name #\f
+                                  :description "File to lint" :key :file)
+             (clingon:make-option :string :long-name "code"
+                                  :description "Inline code" :key :code)
+             (make-recovery-option))
+   :handler #'lint/handler))
+
+;;; ============================================================
+;;; Diff-forms Command (structural comparison)
+;;; ============================================================
+
+(defun collapse-to-line (string &optional (max-chars 60))
+  "First MAX-CHARS of STRING with newlines/tabs collapsed to spaces."
+  (let ((flat (with-output-to-string (out)
+                (loop for ch across string
+                      do (write-char (if (member ch '(#\Newline #\Tab #\Return)) #\Space ch) out)))))
+    (let ((trimmed (string-left-trim " " flat)))
+      (if (> (length trimmed) max-chars)
+          (concatenate 'string (subseq trimmed 0 max-chars) "...")
+          trimmed))))
+
+(defun diff-forms/handler (cmd)
+  (let* ((name (clingon:getopt cmd :name))
+         (against-file (clingon:getopt cmd :against-file))
+         (against-name (clingon:getopt cmd :against-name))
+         (recovery (clingon:getopt cmd :recovery))
+         (text-a (read-input cmd))
+         (file-b (resolve-file-path against-file))
+         (text-b (if file-b
+                     (read-file-to-string file-b)
+                     (read-input cmd))))
+    (unless name
+      (format *error-output* "Error: --name is required~%")
+      (clingon:exit 1))
+    (let ((node-a (or (find-top-level-by-name text-a name :recovery recovery)
+                      (error "No top-level form named '~a' in first source" name)))
+          (node-b (or (find-top-level-by-name
+                       text-b (or against-name name) :recovery recovery)
+                      (error "No top-level form named '~a' in second source" (or against-name name)))))
+      ;; classify direct children by exact source equality
+      (let ((kids-a (mapcar (lambda (n) (node-source-text text-a n))
+                            (node-children node-a)))
+            (kids-b (mapcar (lambda (n) (node-source-text text-b n))
+                            (node-children node-b)))
+            (added nil) (removed nil) (kept-a (make-hash-table :test #'equal)))
+      (dolist (k kids-a) (incf (gethash k kept-a 0)))
+      (dolist (k kids-b)
+        (if (plusp (gethash k kept-a 0))
+            (decf (gethash k kept-a 0))
+            (push k added)))
+      (maphash (lambda (k n)
+                 (dotimes (_ n) (push k removed)))
+               kept-a)
+      (format *standard-output* "~{+ ~a~%~}" (mapcar #'collapse-to-line (nreverse added)))
+      (format *standard-output* "~{- ~a~%~}" (mapcar #'collapse-to-line (nreverse removed)))
+      (when (and (null added) (null removed))
+        (format *standard-output* "Structurally identical (direct children).~%"))
+      (when (or added removed)
+        (clingon:exit 1))))))
+
+(defun diff-forms/command ()
+  (clingon:make-command
+   :name "diff-forms"
+   :usage "-f FILE --name X [--against-file G] [--against-name Y]"
+   :description "Tree-level add/remove summary of a form's direct children across two versions"
+   :options (list
+             (clingon:make-option :string :long-name "file" :short-name #\f
+                                  :description "First (current) file" :key :file)
+             (clingon:make-option :string :long-name "code"
+                                  :description "Inline code (first source)" :key :code)
+             (clingon:make-option :string :long-name "name" :short-name #\n
+                                  :description "Form to compare" :key :name)
+             (clingon:make-option :string :long-name "against-file"
+                                  :description "Second file (default: same as --code/-f)" :key :against-file)
+             (clingon:make-option :string :long-name "against-name"
+                                  :description "Form name in second source (default: same)" :key :against-name)
+             (make-recovery-option))
+   :handler #'diff-forms/handler))
+
 ;;; Help / Version Subcommands
 ;;; ============================================================
 
 (defun version/handler (cmd)
   (declare (ignore cmd))
-  (format *standard-output* "cl-toolkit 0.2.1~%"))
+  (format *standard-output* "cl-toolkit 0.3.0~%"))
 
 (defun version/command ()
   (clingon:make-command
@@ -1351,7 +1638,7 @@
   "Returns the top-level cl-toolkit command."
   (clingon:make-command
    :name "cl-toolkit"
-   :version "0.2.1"
+   :version "0.3.0"
    :description "Lisp code parser for structural analysis and editing. All positions are 0-based (grep -n counts from 1)."
    :long-description "A CLI tool for parsing, querying, and editing Lisp source code ~
                       using structural AST operations. Supports standard and ~
@@ -1365,6 +1652,10 @@
                     (parse/command)
                     (find/command)
                     (find-forms/command)
+                    (check-anchor/command)
+                    (patch-span/command)
+                    (lint/command)
+                    (diff-forms/command)
                     (extract/command)
                     (validate/command)
                     (top-level/command)
