@@ -231,7 +231,16 @@
           (name (clingon:getopt ,cmd :name))
           (end (clingon:getopt ,cmd :end))
           (pretty (clingon:getopt ,cmd :pretty))
-          ,@(when code-key `((code (clingon:getopt ,cmd ,code-key))))
+          ,@(when code-key
+              `((raw-code (clingon:getopt ,cmd ,code-key))
+                ;; Code input modes: value "-" reads stdin, --code-file
+                ;; reads from a file — sidesteps shell quoting (#' etc).
+                (code-file (clingon:getopt ,cmd :code-file))
+                (code (cond
+                        ((and raw-code (string= raw-code "-")) (read-stdin))
+                        ((and (null raw-code) code-file)
+                         (read-file-to-string (resolve-file-path code-file)))
+                        (t raw-code)))))
           (write (clingon:getopt ,cmd :write))
           (preview (clingon:getopt ,cmd :preview))
           (quiet (clingon:getopt ,cmd :quiet))
@@ -798,8 +807,11 @@
                                   :description "Line number" :required t :key :line)
              (clingon:make-option :integer :long-name "col" :short-name #\c
                                   :description "Column number" :required t :key :col)
-             (clingon:make-option :string :long-name "insert" :short-name #\i
+(clingon:make-option :string :long-name "insert" :short-name #\i
                                   :description "Code to insert" :required t :key :insert-code)
+             (clingon:make-option :string :long-name "code-file"
+                                  :description "Read code from file (\"-\" on --insert reads stdin)"
+             :key :code-file)
               (make-write-option)
 (clingon:make-option :string :long-name "backup-dir"
                                    :description "Also save timestamped pre-edit snapshots here"
@@ -847,8 +859,11 @@
                                    :description "Line number" :key :line)
               (clingon:make-option :integer :long-name "col" :short-name #\c
                                    :description "Column number" :key :col)
-               (clingon:make-option :string :long-name "insert" :short-name #\i
+(clingon:make-option :string :long-name "insert" :short-name #\i
                                     :description "Code to insert" :key :insert-code)
+               (clingon:make-option :string :long-name "code-file"
+                                    :description "Read code from file (\"-\" on --insert reads stdin)"
+               :key :code-file)
                (make-write-option)
 (clingon:make-option :string :long-name "backup-dir"
                                     :description "Also save timestamped pre-edit snapshots here"
@@ -929,8 +944,11 @@
                                    :description "Append after named form" :key :name)
               (clingon:make-option :flag :long-name "end"
                                    :description "Append at end of file" :key :end)
-               (clingon:make-option :string :long-name "insert" :short-name #\i
+(clingon:make-option :string :long-name "insert" :short-name #\i
                                     :description "Code to insert" :required t :key :insert-code)
+               (clingon:make-option :string :long-name "code-file"
+                                    :description "Read code from file (\"-\" on --insert reads stdin)"
+               :key :code-file)
                (make-write-option)
 (clingon:make-option :string :long-name "backup-dir"
                                     :description "Also save timestamped pre-edit snapshots here"
@@ -1097,6 +1115,9 @@
                                    :key :contains)
               (clingon:make-option :string :long-name "match"
                                    :description "Replace smallest subform matching this snippet inside the target form" :key :match)
+              (clingon:make-option :string :long-name "code-file"
+                                   :description "Read code from file instead of inline argument (\"-\" on the code arg reads stdin)"
+                                   :key :code-file)
               (clingon:make-option :flag :long-name "match-exact"
                                    :description "--match must match exactly; never fall back to contains-match"
                                    :key :match-exact)
@@ -1496,6 +1517,9 @@
                                   :description "Exact existing text to replace" :key :old-text)
              (clingon:make-option :string :long-name "new"
                                   :description "Replacement text" :key :new-text)
+              (clingon:make-option :string :long-name "code-file"
+                                   :description "Read code from file instead of inline argument (\"-\" reads stdin)"
+                                   :key :code-file)
              (clingon:make-option :flag :long-name "allow-shift"
                                   :description "Permit nonzero net depth delta"
                                   :key :allow-shift)
@@ -1623,7 +1647,7 @@
 
 (defun version/handler (cmd)
   (declare (ignore cmd))
-  (format *standard-output* "cl-toolkit 0.3.1~%"))
+  (format *standard-output* "cl-toolkit 0.3.2~%"))
 
 (defun version/command ()
   (clingon:make-command
@@ -1650,7 +1674,7 @@
   "Returns the top-level cl-toolkit command."
   (clingon:make-command
    :name "cl-toolkit"
-   :version "0.3.1"
+   :version "0.3.2"
    :description "Lisp code parser for structural analysis and editing. All positions are 0-based (grep -n counts from 1)."
    :long-description "A CLI tool for parsing, querying, and editing Lisp source code ~
                       using structural AST operations. Supports standard and ~

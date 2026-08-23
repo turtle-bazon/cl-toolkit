@@ -3,6 +3,20 @@
 All notable changes to cl-toolkit. During 0.x, breaking changes are
 marked `BREAKING:`.
 
+## [0.3.2] - 2026-08-22
+
+### Added
+
+- Quoting-free code input on replace-form / append-form / insert-form /
+  patch-span: `--code-file PATH` reads replacement from a file, and a
+  value of `-` (e.g. `--replace -`) reads stdin. Sidesteps the bash
+  sharp-quote trap entirely — no python subprocess layer needed:
+
+      cl-toolkit replace-form -f X.lisp --name f \
+        --code-file /tmp/new-body.lisp --write
+
+      cat new-body.lisp | cl-toolkit replace-form ... --replace -
+
 ## [0.3.1] - 2026-08-22
 
 ### Fixed
