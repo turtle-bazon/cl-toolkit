@@ -216,15 +216,21 @@
 
 (defun validate-edited-source (result recovery &optional skip)
   "Validate that RESULT parses as Lisp unless SKIP is true.
-   RECOVERY selects the error-recovery parser. Exits with an error on failure."
+   RECOVERY selects the error-recovery parser. On failure the reason is
+   emitted on BOTH channels (stderr human line + stdout failure JSON)
+   before exiting 1 — single-channel captures keep the diagnosis."
   (when (and (not skip) result (> (length result) 0))
     (let ((result-ast (if recovery
                           (cl-toolkit-grammar::parse-with-recovery result)
                           (cl-toolkit-grammar::parse-lisp-source result))))
       (when (eq (node-type result-ast) :error)
-        (format *error-output* "Result validation failed: ~a~%"
-                (node-value result-ast))
-        (clingon:exit 1)))))
+        (let ((msg (format nil "Result validation failed: ~a"
+                           (node-value result-ast))))
+          (format *error-output* "~a~%" msg)
+          (format *standard-output* "{\"success\":false,\"error\":\"~a\"}~%"
+                  (cl-toolkit-ast::escape-json-string msg))
+          (finish-output *standard-output*)
+          (clingon:exit 1))))))
 
 (defmacro with-edit-context ((cmd &key code-key) &body body)
   "Bind the standard edit-command options from CMD and run BODY.
@@ -1822,7 +1828,7 @@
 
 (defun version/handler (cmd)
   (declare (ignore cmd))
-  (format *standard-output* "cl-toolkit 0.4.1~%"))
+  (format *standard-output* "cl-toolkit 0.4.2~%"))
 
 (defun version/command ()
   (clingon:make-command
@@ -1849,7 +1855,7 @@
   "Returns the top-level cl-toolkit command."
   (clingon:make-command
    :name "cl-toolkit"
-   :version "0.4.1"
+   :version "0.4.2"
    :description "Lisp code parser for structural analysis and editing. All positions are 0-based (grep -n counts from 1)."
    :long-description "A CLI tool for parsing, querying, and editing Lisp source code ~
                       using structural AST operations. Supports standard and ~

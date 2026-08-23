@@ -3,6 +3,16 @@
 All notable changes to cl-toolkit. During 0.x, breaking changes are
 marked `BREAKING:`.
 
+## [0.4.2] - 2026-08-22
+
+### Fixed
+
+- Result-validation failures (the last stderr-only path) now emit the
+  failure JSON on stdout as well. With this, every refusal/diagnosis in
+  the toolkit — pre-write guards, post-write validation, and edit
+  errors — rides both channels. Single-channel captures cannot lose a
+  diagnosis anywhere in the contract.
+
 ## [0.4.1] - 2026-08-22
 
 ### Fixed
