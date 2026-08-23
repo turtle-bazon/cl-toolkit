@@ -2,7 +2,7 @@
   :description "Lisp code toolkit for structural analysis and editing"
   :author "cl-agent-validate"
   :license "GPL-3.0"
-  :version "0.3.3"
+  :version "0.3.4"
   :depends-on (#:alexandria
                #:esrap
                #:parser.common-rules

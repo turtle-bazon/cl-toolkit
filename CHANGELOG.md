@@ -3,6 +3,20 @@
 All notable changes to cl-toolkit. During 0.x, breaking changes are
 marked `BREAKING:`.
 
+## [0.3.4] - 2026-08-22
+
+### Fixed
+
+- append-form/insert-at rejected `--code-file` because clingon's
+  `:required` check on `--insert` fired before code-file normalization
+  (0.3.2 announcement promised these). Requirement relaxed; handler-side
+  guard errors with exit 1 when neither source is given.
+
+### Noted
+
+- Argument-parse failures exit **64** (clingon convention) — nonzero, so
+  the 0.3.3 boolean contract holds across that path too.
+
 ## [0.3.3] - 2026-08-22
 
 ### Fixed

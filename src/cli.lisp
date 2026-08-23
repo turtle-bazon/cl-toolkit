@@ -814,7 +814,7 @@
              (clingon:make-option :integer :long-name "col" :short-name #\c
                                   :description "Column number" :required t :key :col)
 (clingon:make-option :string :long-name "insert" :short-name #\i
-                                  :description "Code to insert" :required t :key :insert-code)
+                                  :description "Code to insert (or omit and use --code-file)" :key :insert-code)
              (clingon:make-option :string :long-name "code-file"
                                   :description "Read code from file (\"-\" on --insert reads stdin)"
              :key :code-file)
@@ -951,7 +951,7 @@
               (clingon:make-option :flag :long-name "end"
                                    :description "Append at end of file" :key :end)
 (clingon:make-option :string :long-name "insert" :short-name #\i
-                                    :description "Code to insert" :required t :key :insert-code)
+                                    :description "Code to insert (or omit and use --code-file)" :key :insert-code)
                (clingon:make-option :string :long-name "code-file"
                                     :description "Read code from file (\"-\" on --insert reads stdin)"
                :key :code-file)
@@ -1653,7 +1653,7 @@
 
 (defun version/handler (cmd)
   (declare (ignore cmd))
-  (format *standard-output* "cl-toolkit 0.3.3~%"))
+  (format *standard-output* "cl-toolkit 0.3.4~%"))
 
 (defun version/command ()
   (clingon:make-command
@@ -1680,7 +1680,7 @@
   "Returns the top-level cl-toolkit command."
   (clingon:make-command
    :name "cl-toolkit"
-   :version "0.3.3"
+   :version "0.3.4"
    :description "Lisp code parser for structural analysis and editing. All positions are 0-based (grep -n counts from 1)."
    :long-description "A CLI tool for parsing, querying, and editing Lisp source code ~
                       using structural AST operations. Supports standard and ~
