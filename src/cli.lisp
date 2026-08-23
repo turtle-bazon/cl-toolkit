@@ -257,6 +257,8 @@
           (nearest (clingon:getopt ,cmd :nearest))
           (contains-arg (clingon:getopt ,cmd :contains))
           (match-exact (clingon:getopt ,cmd :match-exact))
+          (after-anchor (clingon:getopt ,cmd :after-anchor))
+          (find-old (clingon:getopt ,cmd :find-old))
           (allow-multi-forms (clingon:getopt ,cmd :allow-multi-forms))
           (backup-dir (clingon:getopt ,cmd :backup-dir))
           (no-backup (clingon:getopt ,cmd :no-backup))
@@ -810,9 +812,9 @@
              (clingon:make-option :string :long-name "source"
                                   :description "Source code to edit" :key :source)
              (clingon:make-option :integer :long-name "line" :short-name #\l
-                                  :description "Line number" :required t :key :line)
+                                  :description "Line number (or use --after-anchor)" :key :line)
              (clingon:make-option :integer :long-name "col" :short-name #\c
-                                  :description "Column number" :required t :key :col)
+                                  :description "Column number (or use --after-anchor)" :key :col)
 (clingon:make-option :string :long-name "insert" :short-name #\i
                                   :description "Code to insert (or omit and use --code-file)" :key :insert-code)
              (clingon:make-option :string :long-name "code-file"
@@ -838,11 +840,19 @@
     (validate-new-code code no-validate-input)
     (handler-case
         (let ((result
-                (if (and line col code)
-                    (insert-form-at text line col code :recovery recovery)
-                    (progn
-                      (format *error-output* "Error: --line/--col/--insert required~%")
-                      (clingon:exit 1)))))
+                (cond
+                  ((and after-anchor code)
+                   ;; position = just past the unique anchor occurrence
+                   (let ((pos (unique-anchor-offset text after-anchor)))
+                     (concatenate 'string
+                                  (subseq text 0 pos)
+                                  code
+                                  (subseq text pos))))
+                  ((and line col code)
+                   (insert-form-at text line col code :recovery recovery))
+                  (t
+                   (format *error-output* "Error: --line/--col or --after-anchor (plus --insert) required~%")
+                   (clingon:exit 1)))))
           (validate-edited-source result recovery no-validate-result)
           (deliver-edit-result result original-text file preview write quiet))
       (error (c)
@@ -867,6 +877,9 @@
                                    :description "Column number" :key :col)
 (clingon:make-option :string :long-name "insert" :short-name #\i
                                     :description "Code to insert" :key :insert-code)
+             (clingon:make-option :string :long-name "after-anchor"
+                                  :description "Position just past the unique occurrence of this snippet"
+                                  :key :after-anchor)
                (clingon:make-option :string :long-name "code-file"
                                     :description "Read code from file (\"-\" on --insert reads stdin)"
                :key :code-file)
@@ -897,8 +910,8 @@
     (unless code
       (format *error-output* "Error: --insert is required~%")
       (clingon:exit 1))
-    (when (and (not end) (not name) (not (and line col)))
-      (format *error-output* "Error: --end, --name, or --line/--col required~%")
+    (when (and (not end) (not name) (not after-anchor) (not (and line col)))
+      (format *error-output* "Error: --end, --name, --after-anchor, or --line/--col required~%")
       (clingon:exit 1))
     (validate-new-code code no-validate-input)
     (handler-case
@@ -920,6 +933,18 @@
                                     (string #\Newline)
                                     code
                                     (subseq text node-end)))))
+                  (after-anchor
+                   (let* ((pos (unique-anchor-offset text after-anchor))
+                          (indent (make-string
+                                   (count-leading-spaces text pos)
+                                   :initial-element #\Space)))
+                     ;; newline + inherited indentation, right after the anchor
+                     (concatenate 'string
+                                  (subseq text 0 pos)
+                                  (string #\Newline)
+                                  indent
+                                  code
+                                  (subseq text pos))))
                   (t
                    (append-form-at text line col code :recovery recovery)))))
           (validate-edited-source result recovery no-validate-result)
@@ -950,6 +975,9 @@
                                    :description "Append after named form" :key :name)
               (clingon:make-option :flag :long-name "end"
                                    :description "Append at end of file" :key :end)
+              (clingon:make-option :string :long-name "after-anchor"
+                                   :description "Append just past the unique occurrence of this snippet"
+                                   :key :after-anchor)
 (clingon:make-option :string :long-name "insert" :short-name #\i
                                     :description "Code to insert (or omit and use --code-file)" :key :insert-code)
                (clingon:make-option :string :long-name "code-file"
@@ -1292,14 +1320,27 @@
   (let* ((name (clingon:getopt cmd :name))
          (index (clingon:getopt cmd :index))
          (end (clingon:getopt cmd :end))
+         (child-index (clingon:getopt cmd :child-index))
          (recovery (clingon:getopt cmd :recovery))
          (text (read-input cmd)))
     (unless (or name end index)
       (format *error-output* "Error: --name, --index, or --end required~%")
       (clingon:exit 1))
-    (let ((source (source-of-top-level text
-                                       :name name :index index :end end
-                                       :recovery recovery)))
+    (when (and child-index (null name))
+      (format *error-output* "Error: --child-index requires --name~%")
+      (clingon:exit 1))
+    (let ((source
+            (if child-index
+                ;; verbatim source of the CHILD-INDEX-th direct child of the named form
+                (let* ((host (find-top-level-by-name text name :recovery recovery))
+                       (kids (and host (node-children host))))
+                  (unless (and kids (< child-index (length kids)))
+                    (error "No child at index ~a in '~a' (~a children)"
+                           child-index name (length kids)))
+                  (node-source-text text (nth child-index kids)))
+                (source-of-top-level text
+                                     :name name :index index :end end
+                                     :recovery recovery))))
       (if source
           (format *standard-output* "~a" source)
           (progn
@@ -1327,6 +1368,9 @@
                                   :description "Top-level form index" :key :index)
              (clingon:make-option :flag :long-name "end"
                                   :description "Last top-level form" :key :end)
+             (clingon:make-option :integer :long-name "child-index"
+                                  :description "With --name: print this direct child's verbatim source instead"
+                                  :key :child-index)
              (make-recovery-option))
    :handler #'source-of/handler))
 
@@ -1421,6 +1465,17 @@
 ;;; Check-anchor Command (occurrence verification)
 ;;; ============================================================
 
+
+(defun unique-anchor-offset (text snippet)
+  "Offset just past the END of the unique occurrence of SNIPPET in TEXT.
+   Errors when zero or multiple occurrences exist."
+  (multiple-value-bind (count first-offset)
+      (count-text-occurrences text snippet)
+    (case count
+      (0 (error "Anchor ~s not found" snippet))
+      (1 (+ first-offset (length snippet)))
+      (t (error "Anchor ~s occurs ~a times -- must be unique" snippet count)))))
+
 (defun check-anchor/handler (cmd)
   (let* ((text (read-input cmd))
          (anchor (clingon:getopt cmd :text)))
@@ -1464,11 +1519,23 @@
     (let ((old-text (clingon:getopt cmd :old-text))
           (new-text code)
           (allow-shift (clingon:getopt cmd :allow-shift)))
-      (unless (and line col old-text new-text)
-        (format *error-output* "Error: --line, --col, --old, --new are required~%")
+      (unless (and old-text new-text)
+        (format *error-output* "Error: --old and --new are required~%")
+        (clingon:exit 1))
+      (unless (or (and line col) find-old)
+        (format *error-output* "Error: --line/--col or --find-old required~%")
         (clingon:exit 1))
       (handler-case
-          (let* ((offset (cl-toolkit-ast::offset-to-line-col-inverse text line col))
+          (let* ((offset (if find-old
+                             ;; locate --old uniquely anywhere; no line arithmetic
+                             (multiple-value-bind (cnt off)
+                                 (count-text-occurrences text old-text)
+                               (case cnt
+                                 (0 (error "Anchor ~s not found" old-text))
+                                 (1 off)
+                                 (t (error "Anchor ~s occurs ~a times -- must be unique"
+                                           old-text cnt))))
+                             (cl-toolkit-ast::offset-to-line-col-inverse text line col)))
                  ;; byte-exact precondition: OLD must sit exactly at the position
                  (actual (subseq text offset
                                  (min (length text)
@@ -1494,8 +1561,10 @@
                                          (subseq text (+ offset (length old-text))))))
                 (validate-edited-source result recovery no-validate-result)
                 (when (not quiet)
-                  (format *error-output* "Patching [line ~a, col ~a] delta=~a~%"
-                          line col delta))
+                  (multiple-value-bind (pl pc)
+                      (cl-toolkit-ast::offset-to-line-col text offset)
+                    (format *error-output* "Patching [line ~a, col ~a] delta=~a~%"
+                            pl pc delta)))
                 (deliver-edit-result result original-text file preview write quiet))))
         (error (c)
           (output-edit-result nil (format nil "~a" c)))))))
@@ -1526,6 +1595,9 @@
               (clingon:make-option :string :long-name "code-file"
                                    :description "Read code from file instead of inline argument (\"-\" reads stdin)"
                                    :key :code-file)
+             (clingon:make-option :flag :long-name "find-old"
+                                  :description "Locate --old uniquely anywhere (no line/col needed)"
+                                  :key :find-old)
              (clingon:make-option :flag :long-name "allow-shift"
                                   :description "Permit nonzero net depth delta"
                                   :key :allow-shift)
@@ -1648,12 +1720,102 @@
              (make-recovery-option))
    :handler #'diff-forms/handler))
 
+
+;;; ============================================================
+;;; Insert-in Command (scope-aware insertion, parens managed)
+;;; ============================================================
+
+(defun insert-in/handler (cmd)
+  (with-edit-context (cmd :code-key :insert-code)
+    (unless name
+      (format *error-output* "Error: --name is required~%")
+      (clingon:exit 1))
+    (unless code
+      (format *error-output* "Error: --insert is required~%")
+      (clingon:exit 1))
+    (validate-new-code code no-validate-input)
+    (handler-case
+        (let* ((host (or (find-top-level-by-name text name :recovery recovery)
+                         (error "No top-level form named '~a'" name)))
+               ;; anchor clause inside the host: exact match preferred,
+               ;; contains fallback announced; omit --match to append at end
+               ;; of the host's last child.
+               (anchor (if match
+                           (multiple-value-list
+                            (resolve-replace-target text host match :match-exact match-exact))
+                           (list (first (last (node-children host))))))
+               (clause (first anchor))
+               (fuzzy-p (second anchor)))
+          (unless clause
+            (error "No anchor clause~@[ matching ~s~] inside ~a" match name))
+          (let* ((end (node-end clause))
+                 (indent (make-string (count-leading-spaces text (node-start clause))
+                                      :initial-element #\Space))
+                 (result (concatenate 'string
+                                      (subseq text 0 end)
+                                      (string #\Newline)
+                                      indent
+                                      code
+                                      (subseq text end))))
+            (validate-edited-source result recovery no-validate-result)
+            (when (not quiet)
+              (notify-target (cond (fuzzy-p "Inserting in (fuzzy anchor)")
+                                   (t "Inserting in"))
+                             clause text))
+            (deliver-edit-result result original-text file preview write quiet)))
+      (error (c)
+        (output-edit-result nil (format nil "~a" c))))))
+
+(defun insert-in/command ()
+  (clingon:make-command
+   :name "insert-in"
+   :usage "-f FILE --name F [--match CLAUSE] --insert CODE"
+   :description "Insert FORM into the body of F after the clause matching CLAUSE -- closers managed by construction"
+   :long-description "Scope-aware insertion: splices between existing siblings of F, ~
+                       so paren balance is preserved by construction (no closer arithmetic). ~
+                       Without --match, appends after F's last child."
+   :options (list
+              (clingon:make-option :string :long-name "file" :short-name #\f
+                                   :description "File to edit" :key :file)
+              (clingon:make-option :string :long-name "code"
+                                   :description "Inline code" :key :code)
+              (clingon:make-option :string :long-name "name" :short-name #\n
+                                   :description "Host top-level form" :key :name)
+              (clingon:make-option :string :long-name "match"
+                                   :description "Anchor clause inside the host (exact preferred)"
+                                   :key :match)
+              (clingon:make-option :flag :long-name "match-exact"
+                                   :description "Never fall back to contains-match for the anchor"
+                                   :key :match-exact)
+              (clingon:make-option :string :long-name "insert" :short-name #\i
+                                   :description "Code to insert" :required t :key :insert-code)
+              (clingon:make-option :string :long-name "code-file"
+                                   :description "Read code from file (\"-\" on --insert reads stdin)"
+                                   :key :code-file)
+               (make-write-option)
+               (make-preview-option)
+               (make-quiet-option)
+               (clingon:make-option :string :long-name "backup-dir"
+                                    :description "Also save timestamped pre-edit snapshots here"
+                                    :key :backup-dir)
+               (clingon:make-option :flag :long-name "no-backup"
+                                    :description "Skip the rolling .bak backup on write"
+                                    :key :no-backup)
+               (make-recovery-option)
+               (clingon:make-option :flag :long-name "no-validate-input"
+                                    :description "Skip input code validation"
+                                    :key :no-validate-input)
+               (clingon:make-option :flag :long-name "no-validate-result"
+                                    :description "Skip result validation"
+                                    :key :no-validate-result))
+   :handler #'insert-in/handler))
+
 ;;; Help / Version Subcommands
 ;;; ============================================================
 
 (defun version/handler (cmd)
   (declare (ignore cmd))
-  (format *standard-output* "cl-toolkit 0.3.4~%"))
+  (format *standard-output* "cl-toolkit 0.4.0~%"))
 
 (defun version/command ()
   (clingon:make-command
@@ -1680,7 +1842,7 @@
   "Returns the top-level cl-toolkit command."
   (clingon:make-command
    :name "cl-toolkit"
-   :version "0.3.4"
+   :version "0.4.0"
    :description "Lisp code parser for structural analysis and editing. All positions are 0-based (grep -n counts from 1)."
    :long-description "A CLI tool for parsing, querying, and editing Lisp source code ~
                       using structural AST operations. Supports standard and ~
@@ -1694,6 +1856,7 @@
                     (parse/command)
                     (find/command)
                     (find-forms/command)
+                    (insert-in/command)
                     (check-anchor/command)
                     (patch-span/command)
                     (lint/command)

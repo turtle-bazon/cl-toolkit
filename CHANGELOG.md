@@ -3,6 +3,40 @@
 All notable changes to cl-toolkit. During 0.x, breaking changes are
 marked `BREAKING:`.
 
+## [0.4.0] - 2026-08-22
+
+### Added
+
+- **`insert-in --name F [--match CLAUSE] --insert CODE`** — scope-aware
+  insertion: splices between existing siblings of F, so paren balance is
+  preserved by construction. Without --match, appends after F's last
+  child. The wrap problem that started the gap-report thread.
+- **`--after-anchor SNIPPET`** on insert-form and append-form — position
+  resolves to just past the unique occurrence of SNIPPET (ambiguity
+  refuses with count). Positions survive unrelated edits; no line
+  arithmetic. append-form inherits the anchor's line indentation.
+- **`patch-span --find-old`** — locates `--old` uniquely anywhere in the
+  file instead of requiring line/col; kills the bottom-up line-tracking
+  dance entirely.
+- **`source-of --child-index K`** — verbatim source of the K-th direct
+  child of a named form (first slice of subform path addressing).
+- **`test/cli-matrix.sh`** (also `make ci`-able via direct run) — 29
+  per-command exit-code assertions covering every command's happy path
+  and refusal path. Born from the B1 lesson: announced ≠ shipped, so the
+  matrix is the release gate now.
+
+### Fixed
+
+- insert-form's own `:required` line/col flags blocked --after-anchor
+  mode (B1-class bug caught by the new matrix before release).
+
+### Deferred
+
+- `move-clauses` (control-flow extraction with closer management):
+  needs a real restructuring engine; design note pending. Today the
+  patch-span + shape-guard + insert-in trio covers the same moves with
+  explicit steps.
+
 ## [0.3.4] - 2026-08-22
 
 ### Fixed

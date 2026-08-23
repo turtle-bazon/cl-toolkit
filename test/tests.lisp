@@ -308,3 +308,14 @@
          (top (first (list-top-level (parse-lisp-source text)))))
     (is (null (find-subform-matching-exact top text "(h")))
     (is (not (null (find-subform-matching-exact top text "(h 123)"))))))
+
+;;; 0.4.0 — anchor addressing + scope-aware insertion helpers
+
+(test unique-anchor-offset-end
+  (is (= 14 (unique-anchor-offset "(defun f () 1)" "1)"))))
+
+(test count-text-occurrences-overlap
+  (multiple-value-bind (count off)
+      (count-text-occurrences "(a)(a)" "(a)")
+    (is (= 2 count))
+    (is (= 0 off))))

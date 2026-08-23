@@ -12,6 +12,7 @@ help:
 	@echo "  make clean        - Remove compiled artifacts"
 	@echo "  make test         - Run FiveAM unit/regression tests"
 	@echo "  make smoke-test   - Quick CLI smoke test"
+	@echo "  make ci           - Per-command CLI matrix (29 assertions)"
 	@echo "  make help         - Show this help"
 
 build: $(wildcard src/*.lisp) cl-toolkit.asd
@@ -21,6 +22,9 @@ build: $(wildcard src/*.lisp) cl-toolkit.asd
 	        --eval '(asdf:operate (quote asdf:program-op) :cl-toolkit/bin)' \
 	        --eval '(ext:quit)'
 	mv -f cl-toolkit $(TARGET)
+
+ci: build
+	@bash test/cli-matrix.sh ./build/cl-toolkit
 
 smoke-test: $(TARGET)
 	@echo "--- Smoke test ---"
