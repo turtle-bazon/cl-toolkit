@@ -73,10 +73,16 @@
       (when (probe-file tmp-new) (delete-file tmp-new)))))
 
 (defun output-edit-result (text &optional error-msg)
-  "Output a JSON edit result."
+  "Output a JSON edit result.
+   Failure reports EXIT 1 — consumers can trust the exit code instead of
+   grepping output for \"error\" (diffs legitimately contain that word)."
   (if error-msg
-      (format *standard-output* "{\"success\":false,\"error\":\"~a\"}~%"
-              (cl-toolkit-ast::escape-json-string error-msg))
+      (progn
+        (format *standard-output* "{\"success\":false,\"error\":\"~a\"}~%"
+                (cl-toolkit-ast::escape-json-string error-msg))
+        ;; NOTE: clingon:exit unwinds via handler; flush first.
+        (finish-output *standard-output*)
+        (clingon:exit 1))
       (format *standard-output* "{\"success\":true,\"source\":\"~a\"}~%"
               (cl-toolkit-ast::escape-json-string text))))
 
@@ -1647,7 +1653,7 @@
 
 (defun version/handler (cmd)
   (declare (ignore cmd))
-  (format *standard-output* "cl-toolkit 0.3.2~%"))
+  (format *standard-output* "cl-toolkit 0.3.3~%"))
 
 (defun version/command ()
   (clingon:make-command
@@ -1674,7 +1680,7 @@
   "Returns the top-level cl-toolkit command."
   (clingon:make-command
    :name "cl-toolkit"
-   :version "0.3.2"
+   :version "0.3.3"
    :description "Lisp code parser for structural analysis and editing. All positions are 0-based (grep -n counts from 1)."
    :long-description "A CLI tool for parsing, querying, and editing Lisp source code ~
                       using structural AST operations. Supports standard and ~

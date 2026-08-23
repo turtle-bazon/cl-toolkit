@@ -3,6 +3,17 @@
 All notable changes to cl-toolkit. During 0.x, breaking changes are
 marked `BREAKING:`.
 
+## [0.3.3] - 2026-08-22
+
+### Fixed
+
+- **Exit codes are now trustworthy on every failure path**: JSON
+  `{"success":false,...}` reports exited 0, forcing consumers to grep
+  output — and diffs legitimately contain the word "error" (e.g.
+  `(error 'calc-error ...)` clauses), producing false failures.
+  All error reports now exit 1; success stays 0. Script checks should
+  be `if cl-toolkit ...; then` — no text grepping.
+
 ## [0.3.2] - 2026-08-22
 
 ### Added
