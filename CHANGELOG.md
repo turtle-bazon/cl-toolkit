@@ -3,6 +3,18 @@
 All notable changes to cl-toolkit. During 0.x, breaking changes are
 marked `BREAKING:`.
 
+## [0.4.1] - 2026-08-22
+
+### Fixed
+
+- patch-span refusals (anchor mismatch, depth guard) printed only to
+  stderr — filtered captures saw silence after/without the Patching
+  line. Refusal reasons now also emit the standard failure JSON on
+  stdout, so ANY single captured channel carries the diagnosis.
+  Field anomaly (exit 1 twice, reason invisible) traced to this: the
+  depth guard had almost certainly fired legitimately on near-identical
+  fragments whose diagnostics were filtered away.
+
 ## [0.4.0] - 2026-08-22
 
 ### Added

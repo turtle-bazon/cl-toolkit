@@ -1541,19 +1541,26 @@
                                  (min (length text)
                                       (+ offset (length old-text))))))
             (unless (string= actual old-text)
-              (format *error-output*
-                      "Anchor mismatch at line ~a, col ~a~%  expected: ~s~%  found:    ~s~%"
-                      line col old-text actual)
-              (clingon:exit 1))
+              (let ((msg (format nil "Anchor mismatch at line ~a, col ~a: expected ~s, found ~s"
+                                 line col old-text actual)))
+                (format *error-output* "~a~%~%  expected: ~s~%  found:    ~s~%"
+                        msg old-text actual)
+                ;; failure JSON on stdout too — single-channel captures
+                ;; must still carry the reason (0.3.3 contract extension)
+                (format *standard-output* "{\"success\":false,\"error\":\"~a\"}~%"
+                        (cl-toolkit-ast::escape-json-string msg))
+                (finish-output *standard-output*)
+                (clingon:exit 1)))
             (let ((delta (net-depth-delta old-text new-text)))
               (unless (zerop delta)
                 (if allow-shift
                     (format *error-output* "Warning: net depth delta ~a (structure shifts)~%" delta)
-                    (progn
-                      (format *error-output*
-                              "Refusing: net depth delta ~a -- closers would shift scope. ~
-                               Pass --allow-shift if this wrap/restructure is intended.~%"
-                              delta)
+                    (let ((msg (format nil "Refusing: net depth delta ~a -- closers would shift scope. Pass --allow-shift if this wrap/restructure is intended."
+                                        delta)))
+                      (format *error-output* "~a~%" msg)
+                      (format *standard-output* "{\"success\":false,\"error\":\"~a\"}~%"
+                              (cl-toolkit-ast::escape-json-string msg))
+                      (finish-output *standard-output*)
                       (clingon:exit 1))))
               (let ((result (concatenate 'string
                                          (subseq text 0 offset)
@@ -1815,7 +1822,7 @@
 
 (defun version/handler (cmd)
   (declare (ignore cmd))
-  (format *standard-output* "cl-toolkit 0.4.0~%"))
+  (format *standard-output* "cl-toolkit 0.4.1~%"))
 
 (defun version/command ()
   (clingon:make-command
@@ -1842,7 +1849,7 @@
   "Returns the top-level cl-toolkit command."
   (clingon:make-command
    :name "cl-toolkit"
-   :version "0.4.0"
+   :version "0.4.1"
    :description "Lisp code parser for structural analysis and editing. All positions are 0-based (grep -n counts from 1)."
    :long-description "A CLI tool for parsing, querying, and editing Lisp source code ~
                       using structural AST operations. Supports standard and ~
