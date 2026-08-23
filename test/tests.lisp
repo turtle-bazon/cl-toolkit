@@ -341,3 +341,18 @@
         (subform-candidates top text "(other)")
       (is (= 1 (length exact2)))
       (is (= 0 (length contains2))))))
+
+;;; 0.5.0 — path addressing + atomic extraction helpers
+
+(test split-on-char-basic
+  (is (equal '("3" "1") (split-string-on-char "3/1" #\/)))
+  (is (equal '("a") (split-string-on-char "a" #\/)))
+  (is (equal '("" "") (split-string-on-char "/" #\/))))
+
+(test node-at-path-walks
+  (let* ((text "(defun d (x) (a) (b))")
+         (host (find-top-level-by-name text "d")))
+    (is (string= "(a)" (node-source-text text (node-at-path text host "3/0"))))
+    (is (string= "(x)" (node-source-text text (node-at-path text host "2"))))
+    (is (null (node-at-path text host "9")))
+    (is (null (node-at-path text host "3/9")))))

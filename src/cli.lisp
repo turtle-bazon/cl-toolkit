@@ -266,6 +266,7 @@
           (after-anchor (clingon:getopt ,cmd :after-anchor))
           (find-old (clingon:getopt ,cmd :find-old))
           (first-flag (clingon:getopt ,cmd :first))
+          (occurrence (clingon:getopt ,cmd :occurrence))
           (allow-multi-forms (clingon:getopt ,cmd :allow-multi-forms))
           (backup-dir (clingon:getopt ,cmd :backup-dir))
           (no-backup (clingon:getopt ,cmd :no-backup))
@@ -1054,7 +1055,7 @@
         (format out "~%  [line ~a, col ~a] ~s" l c
                 (single-line-preview text n 40))))))
 
-(defun resolve-replace-target (text node match &key match-exact first)
+(defun resolve-replace-target (text node match &key match-exact first occurrence)
   "Narrow NODE to its smallest descendant matching SNIPPET.
    Returns (values node fuzzy-p).
    Ambiguity policy (mirrors --contains): when several subforms match,
@@ -1067,17 +1068,24 @@
           (subform-candidates node text match)
         (cond
           (exact
-           (when (and (rest exact) (not first))
-             (error "Ambiguous --match: ~a occurrences of ~s inside this form~a -- refine the snippet, pass --first, or use --match with an occurrence index"
-                    (length exact) match (describe-candidates text exact)))
+           (cond ((and occurrence (<= 1 occurrence (length exact)))
+                  (values (nth (1- occurrence) exact) nil))
+                 ((and occurrence (rest exact))
+                  (error "Occurrence ~a out of range: ~a matches for ~s~a"
+                         occurrence (length exact) match (describe-candidates text exact)))
+                 ((and (rest exact) (not first))
+                  (error "Ambiguous --match: ~a occurrences of ~s inside this form~a -- refine the snippet, pass --first, or pass --occurrence N"
+                         (length exact) match (describe-candidates text exact))))
            (values (first exact) nil))
           (match-exact
            (error "No exact subform matching ~s inside target form (--match-exact forbids contains-fallback). Matching is literal source text: #'x will not match (function x)"
                   match))
           (contains
-           (when (and (rest contains) (not first))
-             (error "Ambiguous --match (contains-level): ~a candidates for ~s~a -- refine the snippet or pass --first"
-                    (length contains) match (describe-candidates text contains)))
+           (cond ((and occurrence (<= 1 occurrence (length contains)))
+                  (values (nth (1- occurrence) contains) t))
+                 ((and (rest contains) (not first))
+                  (error "Ambiguous --match (contains-level): ~a candidates for ~s~a -- refine the snippet, pass --first, or --occurrence N"
+                         (length contains) match (describe-candidates text contains))))
            (values (first contains) t))
           (t
            (error "No subform matching ~s inside target form. Matching is literal source text: #'x will not match (function x)"
@@ -1135,7 +1143,8 @@
                (resolved (multiple-value-list
                           (resolve-replace-target text base-node match
                                                   :match-exact match-exact
-                                                  :first first-flag)))
+                                                  :first first-flag
+                                                  :occurrence occurrence)))
                (target-node (first resolved))
                (fuzzy-p (second resolved))
                (result (replace-node-with-code text target-node code pretty)))
@@ -1210,6 +1219,9 @@
               (clingon:make-option :flag :long-name "first"
                                    :description "With ambiguous --match: take first occurrence instead of refusing"
                                    :key :first)
+              (clingon:make-option :integer :long-name "occurrence"
+                                   :description "Select the Nth (1-based) --match occurrence"
+                                   :key :occurrence)
               (clingon:make-option :flag :long-name "delete-match"
                                    :description "With --match: remove the matched subform instead of replacing"
                                    :key :delete-match)
@@ -1381,7 +1393,8 @@
     (when (and child-index (null name))
       (format *error-output* "Error: --child-index requires --name~%")
       (clingon:exit 1))
-    (let ((source
+    (let ((select (clingon:getopt cmd :select))
+          (source
             (if child-index
                 ;; verbatim source of the CHILD-INDEX-th direct child of the named form
                 (let* ((host (find-top-level-by-name text name :recovery recovery))
@@ -1393,6 +1406,15 @@
                 (source-of-top-level text
                                      :name name :index index :end end
                                      :recovery recovery))))
+      (when select
+        (unless name
+          (format *error-output* "Error: --select requires --name~%")
+          (clingon:exit 1))
+        (let* ((host (find-top-level-by-name text name :recovery recovery))
+               (sub (and host (node-at-path text host select))))
+          (unless sub
+            (error "Path ~s not reachable from '~a'" select name))
+          (setf source (node-source-text text sub))))
       (if source
           (format *standard-output* "~a" source)
           (progn
@@ -1423,6 +1445,9 @@
              (clingon:make-option :integer :long-name "child-index"
                                   :description "With --name: print this direct child's verbatim source instead"
                                   :key :child-index)
+             (clingon:make-option :string :long-name "select"
+                                  :description "With --name: follow a slash-separated child-index path (e.g. 3/0/1) and print that node's verbatim source"
+                                  :key :select)
              (make-recovery-option))
    :handler #'source-of/handler))
 
@@ -1846,6 +1871,9 @@
               (clingon:make-option :flag :long-name "first"
                                    :description "With ambiguous --match: take first occurrence instead of refusing"
                                    :key :first)
+              (clingon:make-option :integer :long-name "occurrence"
+                                   :description "Select the Nth (1-based) --match occurrence"
+                                   :key :occurrence)
               (clingon:make-option :flag :long-name "match-exact"
                                    :description "Never fall back to contains-match for the anchor"
                                    :key :match-exact)
@@ -1872,12 +1900,129 @@
                                     :key :no-validate-result))
    :handler #'insert-in/handler))
 
+
+;;; ============================================================
+;;; Extract-clause Command (atomic clause-to-defun promotion)
+;;; ============================================================
+
+(defun extract-clause/handler (cmd)
+  (with-edit-context (cmd :code-key :insert-code)
+    ;; ATOMICITY CONTRACT: extraction, call-splice, and definition
+    ;; placement are computed entirely in memory; exactly one
+    ;; deliver-edit-result runs. The intermediate incoherent state that
+    ;; killed the manual two-move protocol never exists on disk.
+    (let ((new-name (clingon:getopt cmd :as))
+          (lambda-list (clingon:getopt cmd :lambda-list))
+          (call (clingon:getopt cmd :call)))
+      (unless (and name match new-name lambda-list call)
+        (format *error-output*
+                "Error: --name, --match, --as, --lambda-list, --call are all required~%")
+        (clingon:exit 1))
+      (validate-new-code code no-validate-input)
+      (handler-case
+          (let* ((host (or (find-top-level-by-name text name :recovery recovery)
+                           (error "No top-level form named '~a'" name)))
+                 (resolved (multiple-value-list
+                            (resolve-replace-target text host match
+                                                    :match-exact match-exact
+                                                    :first first-flag
+                                                    :occurrence occurrence)))
+                 (clause (first resolved))
+                 (clause-src (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                          (node-source-text text clause)))
+                 ;; 1) host with clause replaced by the call
+                 (call-form (or code call))
+                 (host-prime (splice-replacement text clause call-form))
+                 ;; 2) new defun owning the extracted body
+                 (defun-src (format nil "(defun ~a ~a~%  ~a)"
+                                    new-name
+                                    lambda-list
+                                    clause-src))
+                 ;; 3) place the defun right after the (modified) host
+                 (host-prime-node (or (find-top-level-by-name host-prime name :recovery recovery)
+                                      (error "Host vanished after splice")))
+                 (host-prime-end (node-end host-prime-node))
+                 (result (concatenate 'string
+                                      (subseq host-prime 0 host-prime-end)
+                                      (string #\Newline)
+                                      (string #\Newline)
+                                      defun-src
+                                      (subseq host-prime host-prime-end))))
+            (validate-edited-source result recovery no-validate-result)
+            (when (not quiet)
+              (format *error-output*
+                      "Extracting ~s from '~a' as ~a ~a (call: ~a)~%"
+                      (single-line-preview text clause 40)
+                      name new-name lambda-list call))
+            (deliver-edit-result result original-text file preview write quiet))
+        (error (c)
+          (output-edit-result nil (format nil "~a" c)))))))
+
+(defun extract-clause/command ()
+  (clingon:make-command
+   :name "extract-clause"
+   :usage "-f FILE --name F --match CLAUSE --as G --lambda-list (ARGS) --call (G ARGS)"
+   :description "Atomically promote a clause to its own defun: extract, splice call, place definition — one write"
+   :long-description "move-clauses v1, per the field post-mortem: extraction, ~
+                       call-splicing, and definition placement are computed ~
+                       in memory and applied as ONE write, so the incoherent ~
+                       intermediate state of the manual two-move protocol ~
+                       never exists on disk. Closer arithmetic is impossible ~
+                       by construction (both edits are between-sibling splices)."
+   :options (list
+              (clingon:make-option :string :long-name "file" :short-name #\f
+                                   :description "File to edit" :key :file)
+              (clingon:make-option :string :long-name "code"
+                                   :description "Inline code" :key :code)
+              (clingon:make-option :string :long-name "name" :short-name #\n
+                                   :description "Host top-level form" :key :name)
+              (clingon:make-option :string :long-name "match"
+                                   :description "Clause to extract (ambiguity policy applies)"
+                                   :key :match)
+              (clingon:make-option :flag :long-name "match-exact"
+                                   :description "Never contains-fallback for the clause anchor"
+                                   :key :match-exact)
+              (clingon:make-option :flag :long-name "first"
+                                   :description "Ambiguous match: take first occurrence"
+                                   :key :first)
+              (clingon:make-option :integer :long-name "occurrence"
+                                   :description "Select Nth (1-based) match occurrence"
+                                   :key :occurrence)
+              (clingon:make-option :string :long-name "as"
+                                   :description "Name of the new defun" :key :as)
+              (clingon:make-option :string :long-name "lambda-list"
+                                   :description "Lambda list for the new defun, e.g. (tok)" :key :lambda-list)
+              (clingon:make-option :string :long-name "call"
+                                   :description "Replacement call form, e.g. (g tok)" :key :call)
+              (clingon:make-option :string :long-name "replace" :short-name #\r
+                                   :description "Alias for --call" :key :insert-code)
+              (clingon:make-option :string :long-name "code-file"
+                                   :description "Read the CALL form from file (\"-\" reads stdin)"
+                                   :key :code-file)
+               (make-write-option)
+               (make-preview-option)
+               (make-quiet-option)
+               (clingon:make-option :string :long-name "backup-dir"
+                                    :description "Also save timestamped pre-edit snapshots here"
+                                    :key :backup-dir)
+               (clingon:make-option :flag :long-name "no-backup"
+                                    :description "Skip the rolling .bak backup on write"
+                                    :key :no-backup)
+               (make-recovery-option)
+               (clingon:make-option :flag :long-name "no-validate-input"
+                                    :description "Skip input code validation"
+                                    :key :no-validate-input)
+               (clingon:make-option :flag :long-name "no-validate-result"
+                                    :description "Skip result validation"
+                                    :key :no-validate-result))
+   :handler #'extract-clause/handler))
+
 ;;; Help / Version Subcommands
 ;;; ============================================================
 
 (defun version/handler (cmd)
   (declare (ignore cmd))
-  (format *standard-output* "cl-toolkit 0.4.3~%"))
+  (format *standard-output* "cl-toolkit 0.5.0~%"))
 
 (defun version/command ()
   (clingon:make-command
@@ -1904,7 +2049,7 @@
   "Returns the top-level cl-toolkit command."
   (clingon:make-command
    :name "cl-toolkit"
-   :version "0.4.3"
+   :version "0.5.0"
    :description "Lisp code parser for structural analysis and editing. All positions are 0-based (grep -n counts from 1)."
    :long-description "A CLI tool for parsing, querying, and editing Lisp source code ~
                       using structural AST operations. Supports standard and ~
@@ -1918,6 +2063,7 @@
                     (parse/command)
                     (find/command)
                     (find-forms/command)
+                    (extract-clause/command)
                     (insert-in/command)
                     (check-anchor/command)
                     (patch-span/command)

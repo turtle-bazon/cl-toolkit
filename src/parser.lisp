@@ -447,6 +447,25 @@
           (contains (smallest contains))
           (t nil))))))
 
+(defun node-at-path (text node path)
+  "Follow a slash-separated child-index PATH (e.g. \"3/0/1\") from NODE.
+   Returns the deepest node, or NIL when any step is out of range."
+  (let ((current node))
+    (dolist (step (mapcar #'parse-integer
+                          (split-string-on-char path #\/)))
+      (let ((kids (and current (node-children current))))
+        (unless (and kids (< step (length kids)))
+          (return-from node-at-path nil))
+        (setf current (nth step kids))))
+    current))
+
+(defun split-string-on-char (string sep-char)
+  "Split STRING on SEP-CHAR, keeping empty segments."
+  (let ((parts nil) (start 0))
+    (loop for pos = (position sep-char string :start start)
+          do (push (subseq string start (or pos (length string))) parts)
+             (if pos (setf start (1+ pos)) (loop-finish))
+          finally (return (nreverse parts)))))
 (defun count-text-occurrences (text snippet)
   "Return (values count first-offset) of literal SNIPPET occurrences in TEXT."
   (let ((count 0) (first-offset nil) (pos 0))
@@ -843,7 +862,7 @@
           do (push (subseq string start (or pos (length string))) parts)
              (if pos
                  (setf start (1+ pos))
-                 (return))
+                 (loop-finish))
           finally (return (nreverse parts)))))
 
 (defun format-minimal (text &key recovery)

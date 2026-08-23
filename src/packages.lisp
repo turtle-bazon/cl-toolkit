@@ -89,6 +89,8 @@
    #:find-forms-containing
    #:count-text-occurrences
    #:find-subform-matching-exact
+   #:node-at-path
+   #:split-string-on-char
    #:net-depth-delta
    #:duplicate-top-level-forms
    #:node-source-text

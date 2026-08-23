@@ -63,6 +63,11 @@ check delete-missing 1 "$BIN" delete-form -f "$TMP/f1.lisp" --name nope --write
 check anchor-ambiguous 1 "$BIN" patch-span -f "$TMP/f1.lisp" --find-old --old "(" --new "x" --allow-shift
 check anchor-missing 1 "$BIN" patch-span -f "$TMP/f1.lisp" --find-old --old "(zzz)" --new "(x)"
 check depth-guard 1 "$BIN" patch-span -f "$TMP/f1.lisp" --find-old --old "(gamma)" --new "(+ (gamma)" --write
+check extract-atomic 0 sh -c "cp '$TMP/base.lisp' '$TMP/e8.lisp' && $BIN extract-clause -f '$TMP/e8.lisp' --name beta --match '(gamma)' --as gamma-helper --lambda-list '()' --call '(gamma-helper)' --write --quiet"
+check extract-missing-clause 1 "$BIN" extract-clause -f "$TMP/base.lisp" --name beta --match "(zzz)" --as g --lambda-list "()" --call "(g)"
+check select-path 0 sh -c "$BIN source-of -f '$TMP/base.lisp' --name beta --select '3/0' >/dev/null"
+check select-bad-path 1 "$BIN" source-of -f "$TMP/base.lisp" --name beta --select "9/9"
+check occurrence-select 0 sh -c "$BIN replace-form -f '$TMP/base.lisp' --name alpha --match '1' --occurrence 1 --replace '2' --preview >/dev/null 2>&1"
 check match-ambiguous 1 "$BIN" replace-form -f "$TMP/f1.lisp" --name beta --match "a" --replace "z"
 check match-ambiguous-first 0 sh -c "$BIN replace-form -f '$TMP/f1.lisp' --name beta --match 'a' --replace 'z' --first --preview >/dev/null 2>&1"
 check missing-code 1 "$BIN" append-form -f "$TMP/f1.lisp" --end --write

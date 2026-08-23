@@ -3,6 +3,35 @@
 All notable changes to cl-toolkit. During 0.x, breaking changes are
 marked `BREAKING:`.
 
+## [0.5.0] - 2026-08-22
+
+### Added
+
+- **extract-clause** — move-clauses v1, atomic per the field post-mortem:
+  clause extraction, call-splice, and new-defun placement are computed
+  in memory and applied as ONE write, so the incoherent intermediate
+  state of the manual two-move protocol never exists on disk. Closer
+  arithmetic impossible by construction (both edits are between-sibling
+  splices). Full ambiguity policy on the clause anchor.
+      extract-clause -f X --name dispatch --match "(probe tok)" 
+        --as handle-unknown --lambda-list "(tok)" 
+        --call "(handle-unknown tok)" --write
+- **source-of --select PATH** — slash-separated child-index chain
+  (e.g. --select 3/0/1) returning verbatim subform source. Replaces
+  most remaining AST-walking.
+- **--occurrence N** on replace-form/insert-in — select the Nth
+  --match occurrence directly (completes the 0.4.3 ambiguity policy).
+- **docs/SCRIPTING-CONTRACT.md** — the stable scripting interface:
+  channel semantics, position/anchor rules, guard table, backup
+  behavior, and the ASDF freshness caveat when driving builds from
+  long-lived images.
+
+### Fixed
+
+- split-string-on-newlines returned NIL for strings without the
+  separator (loop return skipped finally); latent, benign there, but
+  fatal for the new path splitter — both now use loop-finish.
+
 ## [0.4.3] - 2026-08-22
 
 ### Fixed
