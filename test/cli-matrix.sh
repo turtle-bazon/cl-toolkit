@@ -63,6 +63,8 @@ check delete-missing 1 "$BIN" delete-form -f "$TMP/f1.lisp" --name nope --write
 check anchor-ambiguous 1 "$BIN" patch-span -f "$TMP/f1.lisp" --find-old --old "(" --new "x" --allow-shift
 check anchor-missing 1 "$BIN" patch-span -f "$TMP/f1.lisp" --find-old --old "(zzz)" --new "(x)"
 check depth-guard 1 "$BIN" patch-span -f "$TMP/f1.lisp" --find-old --old "(gamma)" --new "(+ (gamma)" --write
+check match-ambiguous 1 "$BIN" replace-form -f "$TMP/f1.lisp" --name beta --match "a" --replace "z"
+check match-ambiguous-first 0 sh -c "$BIN replace-form -f '$TMP/f1.lisp' --name beta --match 'a' --replace 'z' --first --preview >/dev/null 2>&1"
 check missing-code 1 "$BIN" append-form -f "$TMP/f1.lisp" --end --write
 check code-file-broken-append 1 "$BIN" append-form -f "$TMP/f1.lisp" --end --insert "(unclosed" --write
 check write-nonexistent 1 "$BIN" replace-form -f "$TMP/nope-$$.lisp" --index 0 --replace "(x)" --write

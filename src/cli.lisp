@@ -265,6 +265,7 @@
           (match-exact (clingon:getopt ,cmd :match-exact))
           (after-anchor (clingon:getopt ,cmd :after-anchor))
           (find-old (clingon:getopt ,cmd :find-old))
+          (first-flag (clingon:getopt ,cmd :first))
           (allow-multi-forms (clingon:getopt ,cmd :allow-multi-forms))
           (backup-dir (clingon:getopt ,cmd :backup-dir))
           (no-backup (clingon:getopt ,cmd :no-backup))
@@ -1022,22 +1023,62 @@
                      code
                      (subseq text end)))))
 
-(defun resolve-replace-target (text node match &key match-exact)
-  "Narrow NODE to its smallest descendant whose source matches MATCH.
-   Returns (values node fuzzy-p); FUZZY-P is T when a contains-match was
-   used. With a nil MATCH returns NODE unchanged.
-   MATCH-EXACT forbids the contains fallback and fails with guidance
-   instead of escalating silently."
+
+(defun subform-candidates (node text snippet)
+  "Return (values exact-list contains-list): descendants of NODE whose
+   trimmed source equals SNIPPET, and those merely containing it.
+   Lists are smallest-span-first."
+  (let ((exact nil) (contains nil))
+    (labels ((collect (n)
+               (dolist (child (node-children n))
+                 (let* ((raw (node-source-text text child))
+                        (trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) raw)))
+                   (cond
+                     ((string= trimmed snippet) (push child exact))
+                     ((search snippet raw) (push child contains)))
+                   (collect child)))))
+      (collect node)
+      (let ((by-size (lambda (a b) (< (- (node-end a) (node-start a))
+                                      (- (node-end b) (node-start b))))))
+        (values (sort (sort exact #'< :key #'node-start) #'<
+                      :key #'(lambda (n) (- (node-end n) (node-start n))))
+                (sort (sort contains #'< :key #'node-start) #'<
+                      :key #'(lambda (n) (- (node-end n) (node-start n)))))))))
+
+(defun describe-candidates (text nodes)
+  "One-line-per-candidate position/preview listing for ambiguity refusals."
+  (with-output-to-string (out)
+    (dolist (n nodes)
+      (multiple-value-bind (l c)
+          (cl-toolkit-ast::offset-to-line-col text (node-start n))
+        (format out "~%  [line ~a, col ~a] ~s" l c
+                (single-line-preview text n 40))))))
+
+(defun resolve-replace-target (text node match &key match-exact first)
+  "Narrow NODE to its smallest descendant matching SNIPPET.
+   Returns (values node fuzzy-p).
+   Ambiguity policy (mirrors --contains): when several subforms match,
+   refuse and list every occurrence's position — deterministic-first
+   selection is available only via FIRST.
+   MATCH-EXACT forbids the contains fallback."
   (if (null match)
       (values node nil)
-      (let ((exact (find-subform-matching-exact node text match)))
+      (multiple-value-bind (exact contains)
+          (subform-candidates node text match)
         (cond
-          (exact (values exact nil))
+          (exact
+           (when (and (rest exact) (not first))
+             (error "Ambiguous --match: ~a occurrences of ~s inside this form~a -- refine the snippet, pass --first, or use --match with an occurrence index"
+                    (length exact) match (describe-candidates text exact)))
+           (values (first exact) nil))
           (match-exact
            (error "No exact subform matching ~s inside target form (--match-exact forbids contains-fallback). Matching is literal source text: #'x will not match (function x)"
                   match))
-          ((find-subform-matching node text match)
-           (values (find-subform-matching node text match) t))
+          (contains
+           (when (and (rest contains) (not first))
+             (error "Ambiguous --match (contains-level): ~a candidates for ~s~a -- refine the snippet or pass --first"
+                    (length contains) match (describe-candidates text contains)))
+           (values (first contains) t))
           (t
            (error "No subform matching ~s inside target form. Matching is literal source text: #'x will not match (function x)"
                   match))))))
@@ -1092,7 +1133,9 @@
                              (error "No form found at line ~a, col ~a" line col)
                              (error "No form starts exactly at line ~a, col ~a -- pass --nearest for containment match" line col)))))))
                (resolved (multiple-value-list
-                          (resolve-replace-target text base-node match :match-exact match-exact)))
+                          (resolve-replace-target text base-node match
+                                                  :match-exact match-exact
+                                                  :first first-flag)))
                (target-node (first resolved))
                (fuzzy-p (second resolved))
                (result (replace-node-with-code text target-node code pretty)))
@@ -1164,6 +1207,9 @@
               (clingon:make-option :flag :long-name "allow-multi-forms"
                                    :description "Permit replacing one top-level form with several"
                                    :key :allow-multi-forms)
+              (clingon:make-option :flag :long-name "first"
+                                   :description "With ambiguous --match: take first occurrence instead of refusing"
+                                   :key :first)
               (clingon:make-option :flag :long-name "delete-match"
                                    :description "With --match: remove the matched subform instead of replacing"
                                    :key :delete-match)
@@ -1797,6 +1843,9 @@
               (clingon:make-option :string :long-name "match"
                                    :description "Anchor clause inside the host (exact preferred)"
                                    :key :match)
+              (clingon:make-option :flag :long-name "first"
+                                   :description "With ambiguous --match: take first occurrence instead of refusing"
+                                   :key :first)
               (clingon:make-option :flag :long-name "match-exact"
                                    :description "Never fall back to contains-match for the anchor"
                                    :key :match-exact)
@@ -1828,7 +1877,7 @@
 
 (defun version/handler (cmd)
   (declare (ignore cmd))
-  (format *standard-output* "cl-toolkit 0.4.2~%"))
+  (format *standard-output* "cl-toolkit 0.4.3~%"))
 
 (defun version/command ()
   (clingon:make-command
@@ -1855,7 +1904,7 @@
   "Returns the top-level cl-toolkit command."
   (clingon:make-command
    :name "cl-toolkit"
-   :version "0.4.2"
+   :version "0.4.3"
    :description "Lisp code parser for structural analysis and editing. All positions are 0-based (grep -n counts from 1)."
    :long-description "A CLI tool for parsing, querying, and editing Lisp source code ~
                       using structural AST operations. Supports standard and ~

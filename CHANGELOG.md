@@ -3,6 +3,17 @@
 All notable changes to cl-toolkit. During 0.x, breaking changes are
 marked `BREAKING:`.
 
+## [0.4.3] - 2026-08-22
+
+### Fixed
+
+- **Ambiguous --match no longer silently takes the first occurrence**
+  (field finding: 8 identical clauses, deterministic-first replaced one
+  with exit 0). Policy now mirrors --contains: >1 matches refuse and
+  list every occurrence's [line, col] + preview; --first opts into
+  first-match; --match N (occurrence selection) noted as future work.
+  Applies to replace-form and insert-in (shared anchor resolution).
+
 ## [0.4.2] - 2026-08-22
 
 ### Fixed

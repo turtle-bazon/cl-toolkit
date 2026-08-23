@@ -319,3 +319,25 @@
       (count-text-occurrences "(a)(a)" "(a)")
     (is (= 2 count))
     (is (= 0 off))))
+
+;;; 0.4.3 — --match ambiguity policy
+
+(test subform-candidates-counts
+  (let* ((text "(defun d () (cond ((eq x :a) (v s)) ((eq x :b) (v s))))")
+         (top (first (list-top-level (parse-lisp-source text)))))
+    (multiple-value-bind (exact contains)
+        (subform-candidates top text "(v s)")
+      (is (= 2 (length exact)))
+      (is (= 0 (length contains))))))
+
+(test subform-candidates-unique
+  (let* ((text "(defun d () (cond ((eq x :a) (v s)) ((eq x :b) (other))))")
+         (top (first (list-top-level (parse-lisp-source text)))))
+    (multiple-value-bind (exact contains)
+        (subform-candidates top text "(v s)")
+      (is (= 1 (length exact)))
+      (is (= 0 (length contains))))
+    (multiple-value-bind (exact2 contains2)
+        (subform-candidates top text "(other)")
+      (is (= 1 (length exact2)))
+      (is (= 0 (length contains2))))))
