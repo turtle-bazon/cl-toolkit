@@ -3,6 +3,16 @@
 All notable changes to cl-toolkit. During 0.x, breaking changes are
 marked `BREAKING:`.
 
+## [0.3.1] - 2026-08-22
+
+### Fixed
+
+- Preview stats banner printed a malformed label (`(""42002)`);
+  now `Preview stats: 2 -> 2 lines (2 bytes)` / `(no changes)`.
+- Process substitution (`diff-forms -f <(git show HEAD:x.lisp)`) read as
+  empty content: named pipes have no usable FILE-LENGTH, so reading now
+  falls back to stream-to-EOF.
+
 ## [0.3.0] - 2026-08-22
 
 ### BREAKING

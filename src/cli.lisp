@@ -5,14 +5,25 @@
 ;;; ============================================================
 
 (defun read-file-to-string (path)
-  "Read entire file into a string."
+  "Read entire file into a string.
+   Handles named pipes / process substitution (<(...)): those report a
+   bogus FILE-LENGTH of zero or signal, so fall back to reading until
+   EOF instead of preallocating."
   (with-open-file (stream path :direction :input :if-does-not-exist nil)
     (unless stream
       (format *error-output* "Cannot read file: ~a~%" path)
       (clingon:exit 1))
-    (let ((content (make-string (file-length stream))))
-      (read-sequence content stream)
-      content)))
+    (let ((len (ignore-errors (file-length stream))))
+      (if (and len (plusp len))
+          (let ((content (make-string len)))
+            (read-sequence content stream)
+            content)
+          ;; pipes, FIFOs, /dev/fd/N — read to EOF
+          (with-output-to-string (out)
+            (let ((buf (make-string 4096)))
+              (loop for n = (read-sequence buf stream)
+                    do (write-sequence buf out :end n)
+                    while (= n (length buf)))))))))
 
 (defun read-stdin ()
   "Read all input from stdin."
@@ -165,10 +176,11 @@
      (when file
        (let ((old-l (count #\Newline original-text))
              (new-l (count #\Newline result)))
-         (format *error-output* "Preview stats: ~a lines -> ~a lines (~s~a)~%"
-                 old-l new-l
-                 (if (string= original-text result) "no changes, " "")
-                 (length result))))
+         (if (string= original-text result)
+             (format *error-output* "Preview stats: ~a -> ~a lines (no changes)~%"
+                     old-l new-l)
+             (format *error-output* "Preview stats: ~a -> ~a lines (~@a bytes)~%"
+                     old-l new-l (- (length result) (length original-text))))))
      (if file
          (preview-edit original-text result file)
          (progn
@@ -1611,7 +1623,7 @@
 
 (defun version/handler (cmd)
   (declare (ignore cmd))
-  (format *standard-output* "cl-toolkit 0.3.0~%"))
+  (format *standard-output* "cl-toolkit 0.3.1~%"))
 
 (defun version/command ()
   (clingon:make-command
@@ -1638,7 +1650,7 @@
   "Returns the top-level cl-toolkit command."
   (clingon:make-command
    :name "cl-toolkit"
-   :version "0.3.0"
+   :version "0.3.1"
    :description "Lisp code parser for structural analysis and editing. All positions are 0-based (grep -n counts from 1)."
    :long-description "A CLI tool for parsing, querying, and editing Lisp source code ~
                       using structural AST operations. Supports standard and ~
