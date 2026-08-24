@@ -283,12 +283,21 @@
                 (node-value input-ast))
         (clingon:exit 1)))))
 
-(defun validate-edited-source (result recovery &optional skip)
-  "Validate that RESULT parses as Lisp unless SKIP is true.
-   RECOVERY selects the error-recovery parser. On failure the reason is
-   emitted on BOTH channels (stderr human line + stdout failure JSON)
-   before exiting 1 — single-channel captures keep the diagnosis."
-  (when (and (not skip) result (> (length result) 0))
+(defun lisp-file-p (file)
+  "T when FILE looks like a Lisp source file. NIL file (inline --code)
+   counts as Lisp. Non-Lisp targets (README, configs) skip Lisp
+   validation — it is a category error there, not a safety net."
+  (or (null file)
+      (member (pathname-type (pathname file))
+              '("lisp" "asd" "cl" "sexp" "lispworks")
+              :test #'string-equal)))
+
+(defun validate-edited-source (result recovery &optional skip file)
+  "Validate that RESULT parses as Lisp unless SKIP is true or FILE is
+   a non-Lisp target. RECOVERY selects the error-recovery parser. On
+   failure the reason is emitted on BOTH channels (stderr human line +
+   stdout failure JSON) before exiting 1."
+  (when (and (not skip) result (> (length result) 0) (lisp-file-p file))
     (let ((result-ast (if recovery
                           (cl-toolkit-grammar::parse-with-recovery result)
                           (cl-toolkit-grammar::parse-lisp-source result))))
@@ -830,7 +839,7 @@
                   (t
                    (format *error-output* "Error: --end, --name, --index, --contains, or --line/--col required~%")
                    (clingon:exit 1)))))
-          (validate-edited-source result recovery no-validate-result)
+          (validate-edited-source result recovery no-validate-result file)
           (when target-node
             (notify-target "Deleting" target-node text))
           (deliver-edit-result result original-text file preview write quiet))
@@ -985,7 +994,7 @@
                   (t
                    (format *error-output* "Error: --line/--col or --after-anchor (plus --insert) required~%")
                    (clingon:exit 1)))))
-          (validate-edited-source result recovery no-validate-result)
+          (validate-edited-source result recovery no-validate-result file)
           (deliver-edit-result result original-text file preview write quiet))
       (error (c)
         (output-edit-result nil (format nil "~a" c))))))
@@ -1091,7 +1100,7 @@
                                   (subseq text pos))))
                   (t
                    (append-form-at text line col code :recovery recovery)))))
-          (validate-edited-source result recovery no-validate-result)
+          (validate-edited-source result recovery no-validate-result file)
           (when target-node
             (notify-target "Appending after" target-node text))
           (deliver-edit-result result original-text file preview write quiet))
@@ -1353,7 +1362,7 @@
               (error "Refusing: replacement contains ~a top-level forms but replaces one. ~
                       Pass --allow-multi-forms if splitting is intended."
                      repl-count)))
-          (validate-edited-source result recovery no-validate-result)
+          (validate-edited-source result recovery no-validate-result file)
           (when target-node
             (notify-target
            (cond ((and match (stringp code) (string= code "")) "Deleting in")
@@ -1580,7 +1589,7 @@
                                                 :pretty pretty)))
                                       edits-list))
                  (result (apply-batch-edits text edit-plists :recovery recovery)))
-            (validate-edited-source result recovery no-validate-result)
+            (validate-edited-source result recovery no-validate-result file)
             (deliver-edit-result result original-text file preview write quiet))
         (error (c)
           (format *error-output* "Error: ~a~%" c)
@@ -1945,7 +1954,7 @@
                                          (subseq text 0 offset)
                                          new-text
                                          (subseq text (+ offset (length old-text))))))
-                (validate-edited-source result recovery no-validate-result)
+                (validate-edited-source result recovery no-validate-result file)
                 (when (not quiet)
                   (multiple-value-bind (pl pc)
                       (cl-toolkit-ast::offset-to-line-col text offset)
@@ -2155,7 +2164,7 @@
                                       indent
                                       code
                                       (subseq text end))))
-            (validate-edited-source result recovery no-validate-result)
+            (validate-edited-source result recovery no-validate-result file)
             (when (not quiet)
               (notify-target (cond (fuzzy-p "Inserting in (fuzzy anchor)")
                                    (t "Inserting in"))
@@ -2364,7 +2373,7 @@
                                       (string #\Newline)
                                       defun-src
                                       (subseq host-prime host-prime-end))))
-            (validate-edited-source result recovery no-validate-result)
+            (validate-edited-source result recovery no-validate-result file)
             (when (not quiet)
               (format *error-output*
                       "Extracting ~s from '~a' as ~a ~a (call: ~a)~%"
