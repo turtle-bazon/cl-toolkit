@@ -96,6 +96,22 @@
 ;;; Backup policy for --write. Defaults keep the single rolling FILE.bak.
 (defvar *no-backup* nil)
 (defvar *backup-dir* nil)
+(defvar *compile-check* nil)
+
+(defun compile-file-ok-p (file)
+  "Compile FILE in-process to a throwaway fasl.
+   Returns (values t nil) on success, (values nil reason) on failure.
+   In-process is deliberate: no subprocess quoting, and error severity
+   (illegal calls) is exactly what the B1/P0 class needs caught."
+  (let ((fasl (format nil "/tmp/ctk-compile-check-~d.fasl" (get-universal-time))))
+    (handler-case
+        (progn
+          (compile-file file :output-file fasl)
+          (ignore-errors (delete-file fasl))
+          (values t nil))
+      (error (c)
+        (ignore-errors (delete-file fasl))
+        (values nil (princ-to-string c))))))
 
 (defun backup-path-for (file)
   "Return the rolling backup pathname for FILE."
@@ -154,6 +170,23 @@
                                    :if-exists :supersede
                                    :if-does-not-exist :create)
         (write-string source stream))
+      ;; D4 (field post-mortem): compile the product, roll back on error.
+      ;; The B1/extract-clause-P0 class passed every static gate because
+      ;; nothing compiled the output. The .bak from the rename above is a
+      ;; built-in undo for exactly this.
+      (when *compile-check*
+        (multiple-value-bind (ok err)
+            (compile-file-ok-p file)
+          (unless ok
+            (when (probe-file bak)
+              (delete-file file)
+              (rename-file bak file))
+            (let ((msg (format nil "Compile check failed -- rolled back to backup. ~a" err)))
+              (format *error-output* "~a~%" msg)
+              (format *standard-output* "{\"success\":false,\"error\":\"~a\"}~%"
+                      (cl-toolkit-ast::escape-json-string msg))
+              (finish-output *standard-output*)
+              (clingon:exit 1)))))
       (unless quiet
         (cond (*no-backup*
                (format *error-output* "Wrote ~a (no backup)~%" file))
@@ -270,13 +303,15 @@
           (allow-multi-forms (clingon:getopt ,cmd :allow-multi-forms))
           (backup-dir (clingon:getopt ,cmd :backup-dir))
           (no-backup (clingon:getopt ,cmd :no-backup))
+          (compile-check (clingon:getopt ,cmd :compile-check))
           (file (resolve-file-path (clingon:getopt ,cmd :file)))
           (text (read-input ,cmd))
           (original-text (when file (read-file-to-string file))))
      ;; backup policy for this invocation
      (let ((*no-backup* no-backup)
-           (*backup-dir* (when backup-dir (resolve-file-path backup-dir))))
-       (declare (special *no-backup* *backup-dir*))
+           (*backup-dir* (when backup-dir (resolve-file-path backup-dir)))
+           (*compile-check* compile-check))
+       (declare (special *no-backup* *backup-dir* *compile-check*))
        ,@body)))
 
 (defun single-line-preview (text node &optional (max-chars 60))
@@ -684,6 +719,9 @@
               (clingon:make-option :flag :long-name "no-backup"
                                    :description "Skip the rolling .bak backup on write"
                                    :key :no-backup)
+              (clingon:make-option :flag :long-name "compile-check"
+                                   :description "After --write, compile the file and roll back to backup on error"
+                                   :key :compile-check)
               (make-quiet-option))
     :handler #'format/handler))
 
@@ -774,6 +812,9 @@
               (clingon:make-option :flag :long-name "no-backup"
                                    :description "Skip the rolling .bak backup on write"
                                    :key :no-backup)
+              (clingon:make-option :flag :long-name "compile-check"
+                                   :description "After --write, compile the file and roll back to backup on error"
+                                   :key :compile-check)
               (make-preview-option)
               (make-quiet-option)
                (make-recovery-option)
@@ -835,6 +876,9 @@
               (clingon:make-option :flag :long-name "no-backup"
                                    :description "Skip the rolling .bak backup on write"
                                    :key :no-backup)
+              (clingon:make-option :flag :long-name "compile-check"
+                                   :description "After --write, compile the file and roll back to backup on error"
+                                   :key :compile-check)
               (make-preview-option)
               (make-quiet-option))
    :handler #'insert-at/handler))
@@ -898,6 +942,9 @@
                (clingon:make-option :flag :long-name "no-backup"
                                     :description "Skip the rolling .bak backup on write"
                                     :key :no-backup)
+               (clingon:make-option :flag :long-name "compile-check"
+                                    :description "After --write, compile the file and roll back to backup on error"
+                                    :key :compile-check)
               (make-preview-option)
               (make-quiet-option)
               (make-recovery-option)
@@ -998,6 +1045,9 @@
                (clingon:make-option :flag :long-name "no-backup"
                                     :description "Skip the rolling .bak backup on write"
                                     :key :no-backup)
+               (clingon:make-option :flag :long-name "compile-check"
+                                    :description "After --write, compile the file and roll back to backup on error"
+                                    :key :compile-check)
               (make-preview-option)
               (make-quiet-option)
               (make-recovery-option)
@@ -1237,6 +1287,9 @@
              (clingon:make-option :flag :long-name "no-backup"
                                   :description "Skip the rolling .bak backup on write"
                                   :key :no-backup)
+             (clingon:make-option :flag :long-name "compile-check"
+                                  :description "After --write, compile the file and roll back to backup on error"
+                                  :key :compile-check)
              (make-preview-option)
              (make-quiet-option)
              (make-recovery-option)
@@ -1290,6 +1343,9 @@
               (clingon:make-option :flag :long-name "no-backup"
                                    :description "Skip the rolling .bak backup on write"
                                    :key :no-backup)
+              (clingon:make-option :flag :long-name "compile-check"
+                                   :description "After --write, compile the file and roll back to backup on error"
+                                   :key :compile-check)
               (make-preview-option)
               (make-quiet-option)
               (make-recovery-option)
@@ -1365,6 +1421,9 @@
               (clingon:make-option :flag :long-name "no-backup"
                                    :description "Skip the rolling .bak backup on write"
                                    :key :no-backup)
+              (clingon:make-option :flag :long-name "compile-check"
+                                   :description "After --write, compile the file and roll back to backup on error"
+                                   :key :compile-check)
               (make-preview-option)
               (make-quiet-option)
               (make-recovery-option)
@@ -1532,6 +1591,9 @@
               (clingon:make-option :flag :long-name "no-backup"
                                    :description "Skip the rolling .bak backup on write"
                                    :key :no-backup)
+              (clingon:make-option :flag :long-name "compile-check"
+                                   :description "After --write, compile the file and roll back to backup on error"
+                                   :key :compile-check)
               (make-preview-option)
               (make-quiet-option)
               (make-recovery-option))
@@ -1693,6 +1755,9 @@
               (clingon:make-option :flag :long-name "no-backup"
                                    :description "Skip the rolling .bak backup on write"
                                    :key :no-backup)
+              (clingon:make-option :flag :long-name "compile-check"
+                                   :description "After --write, compile the file and roll back to backup on error"
+                                   :key :compile-check)
               (make-quiet-option)
               (make-recovery-option)
               (clingon:make-option :flag :long-name "no-validate-result"
@@ -1891,6 +1956,9 @@
                (clingon:make-option :flag :long-name "no-backup"
                                     :description "Skip the rolling .bak backup on write"
                                     :key :no-backup)
+               (clingon:make-option :flag :long-name "compile-check"
+                                    :description "After --write, compile the file and roll back to backup on error"
+                                    :key :compile-check)
                (make-recovery-option)
                (clingon:make-option :flag :long-name "no-validate-input"
                                     :description "Skip input code validation"
@@ -2074,6 +2142,9 @@
                (clingon:make-option :flag :long-name "no-backup"
                                     :description "Skip the rolling .bak backup on write"
                                     :key :no-backup)
+               (clingon:make-option :flag :long-name "compile-check"
+                                    :description "After --write, compile the file and roll back to backup on error"
+                                    :key :compile-check)
                (make-recovery-option)
                (clingon:make-option :flag :long-name "no-validate-input"
                                     :description "Skip input code validation"
@@ -2088,7 +2159,7 @@
 
 (defun version/handler (cmd)
   (declare (ignore cmd))
-  (format *standard-output* "cl-toolkit 0.5.1~%"))
+  (format *standard-output* "cl-toolkit 0.5.2~%"))
 
 (defun version/command ()
   (clingon:make-command
@@ -2115,7 +2186,7 @@
   "Returns the top-level cl-toolkit command."
   (clingon:make-command
    :name "cl-toolkit"
-   :version "0.5.1"
+   :version "0.5.2"
    :description "Lisp code parser for structural analysis and editing. All positions are 0-based (grep -n counts from 1)."
    :long-description "A CLI tool for parsing, querying, and editing Lisp source code ~
                       using structural AST operations. Supports standard and ~

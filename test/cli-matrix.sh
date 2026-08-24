@@ -73,6 +73,9 @@ check match-ambiguous-first 0 sh -c "$BIN replace-form -f '$TMP/f1.lisp' --name 
 check missing-code 1 "$BIN" append-form -f "$TMP/f1.lisp" --end --write
 check code-file-broken-append 1 "$BIN" append-form -f "$TMP/f1.lisp" --end --insert "(unclosed" --write
 check write-nonexistent 1 "$BIN" replace-form -f "$TMP/nope-$$.lisp" --index 0 --replace "(x)" --write
+# D4: compile-check rolls back illegal-code output (file must survive untouched)
+check compile-check-rollback 1 sh -c "cp '$TMP/base.lisp' '$TMP/cc.lisp' && cp '$TMP/cc.lisp' '$TMP/cc.orig' && $BIN replace-form -f '$TMP/cc.lisp' --name beta --replace '(defun beta () ((string= \"a\" \"a\") 1))' --compile-check --write --quiet >/dev/null 2>&1; diff -q '$TMP/cc.lisp' '$TMP/cc.orig' >/dev/null"
+check compile-check-pass 0 sh -c "cp '$TMP/base.lisp' '$TMP/cc2.lisp' && $BIN replace-form -f '$TMP/cc2.lisp' --name alpha --replace '(defun alpha () (function list))' --compile-check --write --quiet"
 check unknown-command 64 "$BIN" definitely-not-a-command
 
 # --- cond-clause extraction modes (0.5.1) ---

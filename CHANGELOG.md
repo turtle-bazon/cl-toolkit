@@ -3,6 +3,25 @@
 All notable changes to cl-toolkit. During 0.x, breaking changes are
 marked `BREAKING:`.
 
+## [0.5.2] - 2026-08-24
+
+### Added
+
+- **--compile-check** on every write-capable command (field item D4):
+  after --write, the file is compile-filed in-process; on error the
+  write is rolled back from the rolling backup and the reason rides
+  both channels. The B1/extract-clause-P0 class — valid syntax,
+  illegal code — now dies at the tool layer with no external harness.
+  Warning-severity findings (e.g. undefined functions in the edited
+  file) do not fail the check; error severity does.
+
+### Notes
+
+- The process-expression redo anomaly (unbound-variable with fboundp=T)
+  remains outside toolkit charter — build/runtime introspection. The
+  SCRIPTING-CONTRACT mtime/ASDF section covers the suspected class;
+  rename-based writes do refresh mtime, so fresh processes are safe.
+
 ## [0.5.1] - 2026-08-24
 
 ### Fixed
