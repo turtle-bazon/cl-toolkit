@@ -1535,6 +1535,7 @@
                                         (let ((op-str (cdr (assoc :operation e)))
                                               (code (cdr (assoc :code e)))
                                               (name-val (cdr (assoc :name e)))
+                                              (match-val (cdr (assoc :match e)))
                                               (index-val (cdr (assoc :index e)))
                                               (line-val (cdr (assoc :line e)))
                                               (col-val (cdr (assoc :col e))))
@@ -1543,6 +1544,7 @@
                                                                :replace-index)
                                                 :code code
                                                 :name name-val
+                                                :match match-val
                                                 :index index-val
                                                 :line line-val
                                                 :col col-val
