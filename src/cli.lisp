@@ -1298,7 +1298,6 @@
     (unless (or code (and match (null code)))
       (format *error-output* "Error: --replace is required~%")
       (clingon:exit 1))
-    (validate-new-code code no-validate-input)
     (handler-case
         (let* ((match-alone (and match (not (or name index end contains-arg (and line col)))))
                (resolved-global
