@@ -349,6 +349,7 @@
           (after-anchor (clingon:getopt ,cmd :after-anchor))
           (find-old (clingon:getopt ,cmd :find-old))
           (first-flag (clingon:getopt ,cmd :first))
+          (replace-file (clingon:getopt ,cmd :replace-file))
           (occurrence (clingon:getopt ,cmd :occurrence))
           (allow-multi-forms (clingon:getopt ,cmd :allow-multi-forms))
           (backup-dir (clingon:getopt ,cmd :backup-dir))
@@ -1277,6 +1278,9 @@
 
 (defun replace/handler (cmd)
   (with-edit-context (cmd :code-key :replace-code)
+    ;; --replace-file fills an absent --replace before any guards run
+    (when (and replace-file (null code))
+      (setf code (read-file-to-string (resolve-file-path replace-file))))
     (let ((delete-match (clingon:getopt cmd :delete-match)))
       ;; --delete-match removes the --match subform; replacement is empty.
       (when delete-match
@@ -1406,6 +1410,9 @@
               (clingon:make-option :string :long-name "match-file"
                                    :description "Read the --match snippet from a file (multi-line clauses)"
                                    :key :match-file)
+              (clingon:make-option :string :long-name "replace-file"
+                                   :description "Read the replacement from a file (pairs with --match-file)"
+                                   :key :replace-file)
               (clingon:make-option :string :long-name "code-file"
                                    :description "Read code from file instead of inline argument (\"-\" on the code arg reads stdin)"
                                    :key :code-file)

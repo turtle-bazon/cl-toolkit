@@ -91,6 +91,8 @@ check cc-proj-package-flag 0 "$BIN" replace-form -f "$TMP/proj.lisp" --name calc
 check move-by-name 0 sh -c "cp '$TMP/base.lisp' '$TMP/mv.lisp' && $BIN move-form -f '$TMP/mv.lisp' --name beta --after-name alpha --write --quiet && grep -q beta '$TMP/mv.lisp' && head -1 '$TMP/mv.lisp' | grep -q alpha"
 check move-by-name-missing 1 "$BIN" move-form -f "$TMP/base.lisp" --name nope --after-name alpha --write --quiet
 check move-by-name-no-target 1 "$BIN" move-form -f "$TMP/base.lisp" --name alpha --write --quiet
+# F16: --replace-file alias (lost once in a checkout — now pinned by proof)
+check replace-file-alias 0 sh -c "printf '(defun z () 9)' > '$TMP/rf.txt' && cp '$TMP/base.lisp' '$TMP/rf.lisp' && $BIN replace-form -f '$TMP/rf.lisp' --name alpha --match-file /dev/null --replace-file '$TMP/rf.txt' --write --quiet 2>/dev/null || $BIN replace-form -f '$TMP/rf.lisp' --name alpha --replace-file '$TMP/rf.txt' --write --quiet; grep -q '(defun z () 9)' '$TMP/rf.lisp'"
 check unknown-command 64 "$BIN" definitely-not-a-command
 
 # --- cond-clause extraction modes (0.5.1) ---
