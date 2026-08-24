@@ -5,25 +5,21 @@
 ;;; ============================================================
 
 (defun read-file-to-string (path)
-  "Read entire file into a string.
-   Handles named pipes / process substitution (<(...)): those report a
-   bogus FILE-LENGTH of zero or signal, so fall back to reading until
-   EOF instead of preallocating."
+  "Read entire file into a string, always reading to EOF.
+   FILE-LENGTH preallocation is WRONG twice over: it counts bytes, not
+   characters (a UTF-8 file with multibyte chars leaves NUL padding in
+   the string tail — corrupting every subsequent write), and named
+   pipes (<(...) from process substitution) report a bogus length or
+   signal. Buffered read-to-EOF is correct for both."
   (with-open-file (stream path :direction :input :if-does-not-exist nil)
     (unless stream
       (format *error-output* "Cannot read file: ~a~%" path)
       (clingon:exit 1))
-    (let ((len (ignore-errors (file-length stream))))
-      (if (and len (plusp len))
-          (let ((content (make-string len)))
-            (read-sequence content stream)
-            content)
-          ;; pipes, FIFOs, /dev/fd/N — read to EOF
-          (with-output-to-string (out)
-            (let ((buf (make-string 4096)))
-              (loop for n = (read-sequence buf stream)
-                    do (write-sequence buf out :end n)
-                    while (= n (length buf)))))))))
+    (with-output-to-string (out)
+      (let ((buf (make-string 4096)))
+        (loop for n = (read-sequence buf stream)
+              do (write-sequence buf out :end n)
+              while (= n (length buf)))))))
 
 (defun read-stdin ()
   "Read all input from stdin."

@@ -356,3 +356,17 @@
     (is (string= "(x)" (node-source-text text (node-at-path text host "2"))))
     (is (null (node-at-path text host "9")))
     (is (null (node-at-path text host "3/9")))))
+
+;;; F14 regression: UTF-8 multibyte files must not gain NUL tails
+
+(test read-file-to-string-utf8-no-nuls
+  (let ((path "/tmp/ctk-utf8-test.md"))
+    (with-open-file (s path :direction :output :if-exists :supersede
+                            :external-format :utf-8)
+      (write-string "emoji → arrow and Turkish İı Şş" s))
+    (unwind-protect
+         (let ((content (read-file-to-string path)))
+           (is (not (find #\Null content)))
+           (is (search "→" content))
+           (is (search "İı" content)))
+      (ignore-errors (delete-file path)))))
