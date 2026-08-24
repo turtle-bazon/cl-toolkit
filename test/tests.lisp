@@ -362,10 +362,14 @@
 ;;; F15 regression: append into an empty host must not lead with a blank line
 
 (test insert-form-end-empty-host
-  (is (string= "(defun x () 1)"
+  ;; text files end with a newline — the trailing \n is by design
+  (is (string= (concatenate 'string "(defun x () 1)" (string #\Newline))
                (insert-form-end "" "(defun x () 1)" :validate t)))
-  (is (string= "(defun x () 1)"
-               (insert-form-end "   " "(defun x () 1)"))))
+  (is (string= (concatenate 'string "(defun x () 1)" (string #\Newline))
+               (insert-form-end "   " "(defun x () 1)")))
+  (is (string= (concatenate 'string "pre" (string #\Newline)
+                            "(defun x () 1)" (string #\Newline))
+               (insert-form-end "pre" "(defun x () 1)"))))
 
 ;;; F14 regression: UTF-8 multibyte files must not gain NUL tails
 
