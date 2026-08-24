@@ -328,7 +328,8 @@
     (multiple-value-bind (exact contains)
         (subform-candidates top text "(v s)")
       (is (= 2 (length exact)))
-      (is (= 0 (length contains))))))
+      ;; the two cond clauses + the cond itself all contain the snippet
+      (is (= 3 (length contains))))))
 
 (test subform-candidates-unique
   (let* ((text "(defun d () (cond ((eq x :a) (v s)) ((eq x :b) (other))))")
@@ -336,11 +337,11 @@
     (multiple-value-bind (exact contains)
         (subform-candidates top text "(v s)")
       (is (= 1 (length exact)))
-      (is (= 0 (length contains))))
+      (is (= 2 (length contains))))
     (multiple-value-bind (exact2 contains2)
         (subform-candidates top text "(other)")
       (is (= 1 (length exact2)))
-      (is (= 0 (length contains2))))))
+      (is (= 2 (length contains2))))))
 
 ;;; 0.5.0 — path addressing + atomic extraction helpers
 
@@ -352,7 +353,8 @@
 (test node-at-path-walks
   (let* ((text "(defun d (x) (a) (b))")
          (host (find-top-level-by-name text "d")))
-    (is (string= "(a)" (node-source-text text (node-at-path text host "3/0"))))
+    (is (string= "(a)" (node-source-text text (node-at-path text host "3"))))
+    (is (string= "a" (node-source-text text (node-at-path text host "3/0"))))
     (is (string= "(x)" (node-source-text text (node-at-path text host "2"))))
     (is (null (node-at-path text host "9")))
     (is (null (node-at-path text host "3/9")))))

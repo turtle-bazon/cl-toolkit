@@ -92,6 +92,9 @@
    #:count-text-occurrences
    #:find-subform-matching-exact
    #:node-at-path
+   #:unique-anchor-offset
+   #:subform-candidates
+   #:read-file-to-string
    #:split-string-on-char
    #:net-depth-delta
    #:duplicate-top-level-forms

@@ -39,7 +39,7 @@ test:
 	$(SBCL) --eval '(ql:quickload :asdf)' \
 	        --eval '(push #P"./" asdf:*central-registry*)' \
 	        --eval '(ql:quickload :cl-toolkit/tests)' \
-	        --eval '(unless (fiveam:run :cl-toolkit) (uiop:quit 1))' \
+	        --eval '(unless (fiveam:run! :cl-toolkit) (uiop:quit 1))' \
 	        --eval '(uiop:quit)'
 
 setup: build
