@@ -87,6 +87,10 @@ mk proj.lisp '(in-package #:calc)
 '
 check cc-proj-no-flag 1 "$BIN" replace-form -f "$TMP/proj.lisp" --name calc-fn --replace '(defun calc-fn (x) (* x 3))' --compile-check --write --quiet
 check cc-proj-package-flag 0 "$BIN" replace-form -f "$TMP/proj.lisp" --name calc-fn --replace '(defun calc-fn (x) (* x 3))' --compile-check --compile-check-package calc --write --quiet
+# name-based move-form (F12)
+check move-by-name 0 sh -c "cp '$TMP/base.lisp' '$TMP/mv.lisp' && $BIN move-form -f '$TMP/mv.lisp' --name beta --after-name alpha --write --quiet && grep -q beta '$TMP/mv.lisp' && head -1 '$TMP/mv.lisp' | grep -q alpha"
+check move-by-name-missing 1 "$BIN" move-form -f "$TMP/base.lisp" --name nope --after-name alpha --write --quiet
+check move-by-name-no-target 1 "$BIN" move-form -f "$TMP/base.lisp" --name alpha --write --quiet
 check unknown-command 64 "$BIN" definitely-not-a-command
 
 # --- cond-clause extraction modes (0.5.1) ---

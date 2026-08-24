@@ -1458,12 +1458,35 @@
 ;;; Move Command
 ;;; ============================================================
 
+(defun move-host-line-col (text move-name after-name &optional recovery)
+  "Resolve two top-level form names to their (values from-l from-c to-l to-c).
+   Shared by move-form's name-based targeting."
+  (let ((from-node (or (find-top-level-by-name text move-name :recovery recovery)
+                       (error "No top-level form named '~a'" move-name)))
+        (after-node (or (find-top-level-by-name text after-name :recovery recovery)
+                        (error "No top-level form named '~a'" after-name))))
+    (multiple-value-bind (fl fc)
+        (cl-toolkit-ast::offset-to-line-col text (node-start from-node))
+      (multiple-value-bind (tl tc)
+          (cl-toolkit-ast::offset-to-line-col text (node-start after-node))
+        (values fl fc tl tc)))))
+
 (defun move/handler (cmd)
   (with-edit-context (cmd)
     (let ((from-line (clingon:getopt cmd :from-line))
           (from-col (clingon:getopt cmd :from-col))
           (to-line (clingon:getopt cmd :to-line))
-          (to-col (clingon:getopt cmd :to-col)))
+          (to-col (clingon:getopt cmd :to-col))
+          (move-name (clingon:getopt cmd :name))
+          (after-name (clingon:getopt cmd :after-name)))
+      (when (and move-name after-name)
+        (multiple-value-bind (fl fc tl tc)
+            (move-host-line-col text move-name after-name recovery)
+          (setf from-line fl from-col fc to-line tl to-col tc)))
+      (unless (and from-line from-col to-line to-col)
+        (format *error-output*
+                "Error: --from-line/--from-col/--to-line/--to-col or --name/--after-name required~%")
+        (clingon:exit 1))
       (handler-case
           (let ((result (move-form text from-line from-col to-line to-col
                                    :recovery recovery)))
@@ -1482,13 +1505,19 @@
              (clingon:make-option :string :long-name "source"
                                   :description "Source code to edit" :key :source)
              (clingon:make-option :integer :long-name "from-line" :short-name #\l
-                                  :description "Source line" :required t :key :from-line)
+                                  :description "Source line (or use --name/--after-name)" :key :from-line)
              (clingon:make-option :integer :long-name "from-col" :short-name #\a
-                                  :description "Source col" :required t :key :from-col)
+                                  :description "Source col" :key :from-col)
              (clingon:make-option :integer :long-name "to-line" :short-name #\m
-                                  :description "Dest line" :required t :key :to-line)
+                                  :description "Dest line" :key :to-line)
              (clingon:make-option :integer :long-name "to-col" :short-name #\b
-                                  :description "Dest col" :required t :key :to-col)
+                                  :description "Dest col" :key :to-col)
+              (clingon:make-option :string :long-name "name"
+                                   :description "Move the top-level form named this"
+                                   :key :name)
+              (clingon:make-option :string :long-name "after-name"
+                                   :description "Place it after the top-level form named this"
+                                   :key :after-name)
               (make-write-option)
 (clingon:make-option :string :long-name "backup-dir"
                                    :description "Also save timestamped pre-edit snapshots here"
