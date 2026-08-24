@@ -717,10 +717,13 @@
                        (char= (char new-code (1- (length new-code))) #\Newline))
                   new-code
                   (concatenate 'string new-code (string #\Newline)))))
-    (concatenate 'string
-                 (string-trim '(#\Space #\Tab #\Newline) text)
-                 (string #\Newline)
-                 code)))
+    ;; empty (or whitespace-only) host: don't lead with a blank line
+    (if (= (length (string-trim '(#\Space #\Tab #\Newline) text)) 0)
+        code
+        (concatenate 'string
+                     (string-trim '(#\Space #\Tab #\Newline) text)
+                     (string #\Newline)
+                     code))))
 
 (defun replace-form-at (text line col new-code &key recovery)
   "Replace the form at LINE, COL (0-indexed) with NEW-CODE in TEXT.

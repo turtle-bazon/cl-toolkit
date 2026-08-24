@@ -359,6 +359,14 @@
     (is (null (node-at-path text host "9")))
     (is (null (node-at-path text host "3/9")))))
 
+;;; F15 regression: append into an empty host must not lead with a blank line
+
+(test insert-form-end-empty-host
+  (is (string= "(defun x () 1)"
+               (insert-form-end "" "(defun x () 1)" :validate t)))
+  (is (string= "(defun x () 1)"
+               (insert-form-end "   " "(defun x () 1)"))))
+
 ;;; F14 regression: UTF-8 multibyte files must not gain NUL tails
 
 (test read-file-to-string-utf8-no-nuls
