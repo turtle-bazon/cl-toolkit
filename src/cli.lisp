@@ -311,7 +311,16 @@
           (recovery (clingon:getopt ,cmd :recovery))
           (no-validate-input (clingon:getopt ,cmd :no-validate-input))
           (no-validate-result (clingon:getopt ,cmd :no-validate-result))
-          (match (clingon:getopt ,cmd :match))
+          (raw-match (clingon:getopt ,cmd :match))
+          (match-file (clingon:getopt ,cmd :match-file))
+          ;; multi-line snippets from a file — inline --match forces
+          ;; byte-exact shell quoting of whole clauses (F1's sibling)
+          (match (cond
+                   ((and raw-match (string= raw-match "-")) (read-stdin))
+                   ((and (null raw-match) match-file)
+                    (let ((s (read-file-to-string (resolve-file-path match-file))))
+                      (string-trim '(#\Space #\Tab #\Newline #\Return) s)))
+                   (t raw-match)))
           (nearest (clingon:getopt ,cmd :nearest))
           (contains-arg (clingon:getopt ,cmd :contains))
           (match-exact (clingon:getopt ,cmd :match-exact))
@@ -1310,7 +1319,11 @@
                                    :description "Target the unique top-level form whose source contains this snippet"
                                    :key :contains)
               (clingon:make-option :string :long-name "match"
-                                   :description "Replace smallest subform matching this snippet inside the target form" :key :match)
+                                   :description "Replace smallest subform matching this snippet inside the target form (\"-\" reads stdin)"
+                                   :key :match)
+              (clingon:make-option :string :long-name "match-file"
+                                   :description "Read the --match snippet from a file (multi-line clauses)"
+                                   :key :match-file)
               (clingon:make-option :string :long-name "code-file"
                                    :description "Read code from file instead of inline argument (\"-\" on the code arg reads stdin)"
                                    :key :code-file)
@@ -2039,8 +2052,11 @@
               (clingon:make-option :string :long-name "name" :short-name #\n
                                    :description "Host top-level form" :key :name)
               (clingon:make-option :string :long-name "match"
-                                   :description "Anchor clause inside the host (exact preferred)"
+                                   :description "Anchor clause inside the host (exact preferred; \"-\" reads stdin)"
                                    :key :match)
+              (clingon:make-option :string :long-name "match-file"
+                                   :description "Read the --match snippet from a file (multi-line clauses)"
+                                   :key :match-file)
               (clingon:make-option :flag :long-name "first"
                                    :description "With ambiguous --match: take first occurrence instead of refusing"
                                    :key :first)
