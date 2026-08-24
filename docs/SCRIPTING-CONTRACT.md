@@ -65,6 +65,19 @@ All guards emit dual-channel refusals and exit 1.
 
 ---
 
+## Match ops vs patch-span — whole node vs byte prefix
+
+- `replace-form --match`, batch `replace-match`/`delete-match` operate on
+  **whole AST nodes**: the snippet must equal the node's full (trimmed)
+  source, and the replacement swaps the entire node.
+- `patch-span --find-old --old/--new` splices **byte-exact prefixes** —
+  e.g. replacing an opening `(let ...)` block while keeping the node's
+  remaining body.
+
+Symptom of using the wrong one: your prefix snippet matches several
+*containing* nodes and ambiguity refuses (prefixes are contained by
+everything they sit inside). Reach for patch-span.
+
 ## Backups
 
 - Default: rolling `FILE.bak` (previous content) before every write.
