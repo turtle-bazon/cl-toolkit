@@ -1507,6 +1507,17 @@
 ;;; Source-of Command (exact source text extraction)
 ;;; ============================================================
 
+
+(defun print-form-tree (text node prefix out)
+  "Recursively print child paths + one-line previews under PREFIX."
+  (let ((idx 0))
+    (dolist (k (node-children node))
+      (let ((path (if (string= prefix "") (format nil "~a" idx)
+                      (format nil "~a/~a" prefix idx))))
+        (format out "~a  ~s~%" path (single-line-preview text k 56))
+        (print-form-tree text k path out))
+      (incf idx))))
+
 (defun source-of/handler (cmd)
   (let* ((name (clingon:getopt cmd :name))
          (index (clingon:getopt cmd :index))
@@ -1520,7 +1531,8 @@
     (when (and child-index (null name))
       (format *error-output* "Error: --child-index requires --name~%")
       (clingon:exit 1))
-    (let ((select (clingon:getopt cmd :select))
+    (let ((tree (clingon:getopt cmd :tree))
+          (select (clingon:getopt cmd :select))
           (source
             (if child-index
                 ;; verbatim source of the CHILD-INDEX-th direct child of the named form
@@ -1533,6 +1545,15 @@
                 (source-of-top-level text
                                      :name name :index index :end end
                                      :recovery recovery))))
+      (when tree
+        (unless name
+          (format *error-output* "Error: --tree requires --name~%")
+          (clingon:exit 1))
+        (let ((host (find-top-level-by-name text name :recovery recovery)))
+          (unless host
+            (error "No top-level form named '~a'" name))
+          (print-form-tree text host "" *standard-output*)
+          (clingon:exit 0)))
       (when select
         (unless name
           (format *error-output* "Error: --select requires --name~%")
@@ -1572,6 +1593,9 @@
              (clingon:make-option :integer :long-name "child-index"
                                   :description "With --name: print this direct child's verbatim source instead"
                                   :key :child-index)
+             (clingon:make-option :flag :long-name "tree"
+                                  :description "With --name: print the child tree with select/child-index paths + previews"
+                                  :key :tree)
              (clingon:make-option :string :long-name "select"
                                   :description "With --name: follow a slash-separated child-index path (e.g. 3/0/1) and print that node's verbatim source"
                                   :key :select)
@@ -2067,8 +2091,12 @@
     ;; killed the manual two-move protocol never exists on disk.
     (let ((new-name (clingon:getopt cmd :as))
           (lambda-list (clingon:getopt cmd :lambda-list))
-          (call (clingon:getopt cmd :call)))
-      (unless (and name match new-name lambda-list call)
+          (call (clingon:getopt cmd :call))
+          (child-path (clingon:getopt cmd :child-path)))
+      (when (and match child-path)
+        (format *error-output* "Error: --match and --child-path are mutually exclusive~%")
+        (clingon:exit 1))
+      (unless (and name (or match child-path) new-name lambda-list call)
         (format *error-output*
                 "Error: --name, --match, --as, --lambda-list, --call are all required~%")
         (clingon:exit 1))
@@ -2076,11 +2104,17 @@
       (handler-case
           (let* ((host (or (find-top-level-by-name text name :recovery recovery)
                            (error "No top-level form named '~a'" name)))
-                 (resolved (multiple-value-list
-                            (resolve-replace-target text host match
-                                                    :match-exact match-exact
-                                                    :first first-flag
-                                                    :occurrence occurrence)))
+                 (resolved (if child-path
+                               ;; address-based selection — no text matching
+                               (let ((sub (node-at-path text host child-path)))
+                                 (unless sub
+                                   (error "Path ~s not reachable from '~a'" child-path name))
+                                 (list sub nil))
+                               (multiple-value-list
+                                (resolve-replace-target text host match
+                                                        :match-exact match-exact
+                                                        :first first-flag
+                                                        :occurrence occurrence))))
                  (clause (first resolved))
                  (clause-src (string-trim '(#\Space #\Tab #\Newline #\Return)
                                           (node-source-text text clause)))
@@ -2193,6 +2227,9 @@
               (clingon:make-option :string :long-name "match"
                                    :description "Clause to extract (ambiguity policy applies)"
                                    :key :match)
+              (clingon:make-option :string :long-name "child-path"
+                                   :description "Address the clause by child-index path (see source-of --tree) instead of --match"
+                                   :key :child-path)
               (clingon:make-option :flag :long-name "match-exact"
                                    :description "Never contains-fallback for the clause anchor"
                                    :key :match-exact)
