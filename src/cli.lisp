@@ -114,14 +114,18 @@
      missing — handles single-file-against-project-package checks."
   (let ((fasl (format nil "/tmp/ctk-compile-check-~d.fasl" (get-universal-time))))
     (handler-case
-        (progn
+        (let ((*standard-output* (make-broadcast-stream))
+              (*error-output* (make-broadcast-stream)))
+          ;; silence compiler chatter: compiling one file of a multi-file
+          ;; system always warns (undefined siblings) — noise buries real
+          ;; failures. ERROR severity still fails via the condition below.
           (when *compile-check-system*
             (asdf:load-system *compile-check-system* :verbose nil))
           (when *compile-check-package*
             (let ((pkg-name (string-upcase *compile-check-package*)))
               (unless (find-package pkg-name)
                 (make-package pkg-name :use '(:common-lisp)))))
-          (compile-file file :output-file fasl)
+          (compile-file file :output-file fasl :verbose nil)
           (ignore-errors (delete-file fasl))
           (values t nil))
       (error (c)
@@ -2148,10 +2152,14 @@
                         (error "Refusing: span ~s is a multi-child list -- could be a cond clause or a plain call. ~
                                 Pass --when to promote as (when TEST BODY...), or --as-expression to place verbatim."
                                (single-line-preview text clause 40)))
-                       ((and (node-list-p form)
-                             (>= (length (node-children form)) 2)
-                             when-mode)
-                        ;; cond clause: (when TEST BODY...)
+                       ((and (node-list-p form) (node-children form) when-mode)
+                        ;; cond clause promotion:
+                        ;;   (TEST BODY...)  -> (when TEST BODY...)
+                        ;;   ((FORM))        -> FORM  (test-only clause: the
+                        ;;      single child IS the computation; verbatim
+                        ;;      placement would leave ((FORM)) = funcall of
+                        ;;      its value — the 0.5.0 P0 shape, legal syntax,
+                        ;;      runtime breakage, invisible to compile gates)
                         (let* ((kids (node-children form))
                                ;; clause-ast offsets index into CLAUSE-SRC,
                                ;; not the full file
@@ -2168,19 +2176,32 @@
                                                       (node-start k)
                                                       (node-end k))))
                                            (rest kids))))
-                          (with-output-to-string (out)
-                            (format out "(when ~a" test-src)
-                            (dolist (b body-srcs)
-                              (format out "~%    ~a" b))
-                            (format out ")"))))
+                          (if (= (length kids) 1)
+                              ;; test-only clause: unwrap the single child
+                              test-src
+                              (with-output-to-string (out)
+                                (format out "(when ~a" test-src)
+                                (dolist (b body-srcs)
+                                  (format out "~%    ~a" b))
+                                (format out ")")))))
                        ((and (node-atom-p form) (not as-expression))
                         (error "Refusing: --match resolved to an atom ~s. ~
                                 Pass --as-expression to place it verbatim."
                                (single-line-preview text clause 40)))
                        (t clause-src))))
-                 ;; 1) host with clause replaced by the call
+                 ;; 1) host with clause replaced by the call.
+                 ;; The clause span INCLUDES its own parens; a cond clause
+                 ;; replaced by (G ARGS) would parse G as a TEST SYMBOL
+                 ;; (unbound-variable at runtime). Wrapping makes it a
+                 ;; test-only clause ((G ARGS)) whose value is the call.
                  (call-form (or code call))
-                 (host-prime (splice-replacement text clause call-form))
+                 (host-prime (splice-replacement
+                              text clause
+                              (if when-mode
+                                  (format nil "(~a)" call-form)
+                                  ;; --as-expression: span may sit in
+                                  ;; argument position — bare call correct
+                                  call-form)))
                  ;; 2) new defun owning the extracted body
                  (defun-src (format nil "(defun ~a ~a~%  ~a)"
                                     new-name
