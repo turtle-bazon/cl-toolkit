@@ -1633,8 +1633,9 @@
     (unless (or name end index)
       (format *error-output* "Error: --name, --index, or --end required~%")
       (clingon:exit 1))
-    (when (and child-index (null name))
-      (format *error-output* "Error: --child-index requires --name~%")
+    (when (and (or child-index (clingon:getopt cmd :select))
+               (null name) (null index) (null end))
+      (format *error-output* "Error: --child-index/--select require --name, --index, or --end~%")
       (clingon:exit 1))
     (let ((tree (clingon:getopt cmd :tree))
           (select (clingon:getopt cmd :select))
@@ -1651,22 +1652,26 @@
                                      :name name :index index :end end
                                      :recovery recovery))))
       (when tree
-        (unless name
-          (format *error-output* "Error: --tree requires --name~%")
+        (unless (or name index end)
+          (format *error-output* "Error: --tree requires --name, --index, or --end~%")
           (clingon:exit 1))
-        (let ((host (find-top-level-by-name text name :recovery recovery)))
+        (let ((host (or (when name (find-top-level-by-name text name :recovery recovery))
+                        (when index (top-level-node-at text index :recovery recovery))
+                        (when end (first (last (list-top-level (parse-for-edit text recovery))))))))
           (unless host
-            (error "No top-level form named '~a'" name))
+            (error "No matching top-level form"))
           (print-form-tree text host "" *standard-output*)
           (clingon:exit 0)))
       (when select
-        (unless name
-          (format *error-output* "Error: --select requires --name~%")
+        (unless (or name index end)
+          (format *error-output* "Error: --select requires --name, --index, or --end~%")
           (clingon:exit 1))
-        (let* ((host (find-top-level-by-name text name :recovery recovery))
+        (let* ((host (or (when name (find-top-level-by-name text name :recovery recovery))
+                         (when index (top-level-node-at text index :recovery recovery))
+                         (when end (first (last (list-top-level (parse-for-edit text recovery)))))))
                (sub (and host (node-at-path text host select))))
           (unless sub
-            (error "Path ~s not reachable from '~a'" select name))
+            (error "Path ~s not reachable from host" select))
           (setf source (node-source-text text sub))))
       (if source
           (format *standard-output* "~a" source)
@@ -1696,13 +1701,13 @@
              (clingon:make-option :flag :long-name "end"
                                   :description "Last top-level form" :key :end)
              (clingon:make-option :integer :long-name "child-index"
-                                  :description "With --name: print this direct child's verbatim source instead"
+                                  :description "Print this direct child's verbatim source instead (host: --name/--index/--end)"
                                   :key :child-index)
              (clingon:make-option :flag :long-name "tree"
-                                  :description "With --name: print the child tree with select/child-index paths + previews"
+                                  :description "Print the child tree with select/child-index paths (host: --name/--index/--end)"
                                   :key :tree)
              (clingon:make-option :string :long-name "select"
-                                  :description "With --name: follow a slash-separated child-index path (e.g. 3/0/1) and print that node's verbatim source"
+                                  :description "Follow a slash-separated child-index path from the host (--name/--index/--end)"
                                   :key :select)
              (make-recovery-option))
    :handler #'source-of/handler))
