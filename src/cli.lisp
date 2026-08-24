@@ -1168,6 +1168,37 @@
         (format out "~%  [line ~a, col ~a] ~s" l c
                 (single-line-preview text n 40))))))
 
+(defun find-subform-globally (text snippet &key match-exact first occurrence recovery)
+  "Find the unique subform matching SNIPPET across all top-level forms.
+   Same ambiguity policy as resolve-replace-target; returns
+   (values node host fuzzy-p)."
+  (let ((exact-all nil) (contains-all nil) (hosts nil))
+    (dolist (host (list-top-level (parse-for-edit text recovery)))
+      (multiple-value-bind (ex co)
+          (subform-candidates host text snippet)
+        (dolist (e ex)
+          (push e exact-all)
+          (push host hosts))
+        (dolist (c co)
+          (push c contains-all)
+          (push host hosts))))
+    (flet ((pick (cands)
+             (cond ((and occurrence (<= 1 occurrence (length cands)))
+                    (nth (1- occurrence) cands))
+                   ((and (rest cands) (not first))
+                    (error "Ambiguous --match: ~a occurrences of ~s~a -- refine the snippet, pass --first, or --occurrence N"
+                           (length cands) snippet (describe-candidates text cands)))
+                   (t (first cands)))))
+      (cond (exact-all
+             (let ((node (pick exact-all)))
+               (values node (nth (position node exact-all) hosts) nil)))
+            (match-exact
+             (error "No exact subform matching ~s anywhere in the file" snippet))
+            (contains-all
+             (let ((node (pick contains-all)))
+               (values node (nth (position node contains-all) hosts) t)))
+            (t (error "No subform matching ~s anywhere in the file" snippet))))))
+
 (defun resolve-replace-target (text node match &key match-exact first occurrence)
   "Narrow NODE to its smallest descendant matching SNIPPET.
    Returns (values node fuzzy-p).
@@ -1216,20 +1247,29 @@
     (unless code
       (format *error-output* "Error: --replace is required~%")
       (clingon:exit 1))
-    (unless (or (and line col) index name end contains-arg)
-      (format *error-output* "Error: --end, --name, --index, --contains, or --line/--col required~%")
+    (unless (or (and line col) index name end contains-arg match)
+      (format *error-output* "Error: --end, --name, --index, --contains, --match, or --line/--col required~%")
       (clingon:exit 1))
     ;; Empty --replace with --match deletes the matched subform.
     (unless (or code (and match (null code)))
       (format *error-output* "Error: --replace is required~%")
       (clingon:exit 1))
-    (when (and match (not (or name index end contains-arg)))
-      (format *error-output* "Error: --match requires --name, --index, --contains, or --end~%")
-      (clingon:exit 1))
     (validate-new-code code no-validate-input)
     (handler-case
-        (let* ((base-node
+        (let* ((match-alone (and match (not (or name index end contains-arg (and line col)))))
+               (resolved-global
+                (when match-alone
+                  (multiple-value-list
+                   (find-subform-globally text match
+                                          :match-exact match-exact
+                                          :first first-flag
+                                          :occurrence occurrence
+                                          :recovery recovery))))
+               (base-node
                 (cond
+                  (match-alone
+                   (or (first resolved-global)
+                       (error "No subform matching ~s" match)))
                   (end
                    (let ((node (first (last (list-top-level (parse-for-edit text recovery))))))
                      (unless node
@@ -1253,11 +1293,13 @@
                          (if nearest
                              (error "No form found at line ~a, col ~a" line col)
                              (error "No form starts exactly at line ~a, col ~a -- pass --nearest for containment match" line col)))))))
-               (resolved (multiple-value-list
-                          (resolve-replace-target text base-node match
-                                                  :match-exact match-exact
-                                                  :first first-flag
-                                                  :occurrence occurrence)))
+               (resolved (if match-alone
+                             resolved-global
+                             (multiple-value-list
+                              (resolve-replace-target text base-node match
+                                                      :match-exact match-exact
+                                                      :first first-flag
+                                                      :occurrence occurrence))))
                (target-node (first resolved))
                (fuzzy-p (second resolved))
                (result (replace-node-with-code text target-node code pretty)))
