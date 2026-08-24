@@ -100,6 +100,17 @@
 (defvar *compile-check-package* nil)
 (defvar *compile-check-system* nil)
 
+(defvar *load-check* nil)
+
+(defun load-check-ok-p (fasl)
+  "Load FASL to catch evaluation-time errors (defparameter shape
+   mistakes, top-level conditions) that compile-file cannot see.
+   Runs in this image: use the package/system pre-steps for project files.
+   Side-effect warning: top-level forms EXECUTE — opt-in for a reason."
+  (handler-case
+      (progn (load fasl :verbose nil) (values t nil))
+    (error (c) (values nil (princ-to-string c)))))
+
 (defun compile-file-ok-p (file)
   "Compile FILE in-process to a throwaway fasl.
    Returns (values t nil) on success, (values nil reason) on failure.
@@ -126,8 +137,14 @@
               (unless (find-package pkg-name)
                 (make-package pkg-name :use '(:common-lisp)))))
           (compile-file file :output-file fasl :verbose nil)
-          (ignore-errors (delete-file fasl))
-          (values t nil))
+          (if *load-check*
+              (multiple-value-bind (ok lerr)
+                  (load-check-ok-p fasl)
+                (ignore-errors (delete-file fasl))
+                (if ok (values t nil) (values nil lerr)))
+              (progn
+                (ignore-errors (delete-file fasl))
+                (values t nil))))
       (error (c)
         (ignore-errors (delete-file fasl))
         (values nil (princ-to-string c))))))
@@ -334,6 +351,7 @@
           (compile-check (clingon:getopt ,cmd :compile-check))
           (cc-package (clingon:getopt ,cmd :compile-check-package))
           (cc-system (clingon:getopt ,cmd :compile-check-system))
+          (load-check (clingon:getopt ,cmd :load-check))
           (file (resolve-file-path (clingon:getopt ,cmd :file)))
           (text (read-input ,cmd))
           (original-text (when file (read-file-to-string file))))
@@ -342,9 +360,11 @@
            (*backup-dir* (when backup-dir (resolve-file-path backup-dir)))
            (*compile-check* compile-check)
            (*compile-check-package* cc-package)
-           (*compile-check-system* cc-system))
+           (*compile-check-system* cc-system)
+           (*load-check* load-check))
        (declare (special *no-backup* *backup-dir* *compile-check*
-                         *compile-check-package* *compile-check-system*))
+                         *compile-check-package* *compile-check-system*
+                         *load-check*))
        ,@body)))
 
 (defun single-line-preview (text node &optional (max-chars 60))
@@ -761,6 +781,9 @@
               (clingon:make-option :string :long-name "compile-check-system"
                                    :description "asdf:load-system this system before the compile check (full fidelity)"
                                    :key :compile-check-system)
+              (clingon:make-option :flag :long-name "load-check"
+                                   :description "With --compile-check: also LOAD the compiled fasl, catching evaluation-time errors (top-level forms execute!)"
+                                   :key :load-check)
               (make-quiet-option))
     :handler #'format/handler))
 
@@ -860,6 +883,9 @@
               (clingon:make-option :string :long-name "compile-check-system"
                                    :description "asdf:load-system this system before the compile check (full fidelity)"
                                    :key :compile-check-system)
+              (clingon:make-option :flag :long-name "load-check"
+                                   :description "With --compile-check: also LOAD the compiled fasl, catching evaluation-time errors (top-level forms execute!)"
+                                   :key :load-check)
               (make-preview-option)
               (make-quiet-option)
                (make-recovery-option)
@@ -930,6 +956,9 @@
               (clingon:make-option :string :long-name "compile-check-system"
                                    :description "asdf:load-system this system before the compile check (full fidelity)"
                                    :key :compile-check-system)
+              (clingon:make-option :flag :long-name "load-check"
+                                   :description "With --compile-check: also LOAD the compiled fasl, catching evaluation-time errors (top-level forms execute!)"
+                                   :key :load-check)
               (make-preview-option)
               (make-quiet-option))
    :handler #'insert-at/handler))
@@ -1002,6 +1031,9 @@
                (clingon:make-option :string :long-name "compile-check-system"
                                     :description "asdf:load-system this system before the compile check (full fidelity)"
                                     :key :compile-check-system)
+               (clingon:make-option :flag :long-name "load-check"
+                                    :description "With --compile-check: also LOAD the compiled fasl, catching evaluation-time errors (top-level forms execute!)"
+                                    :key :load-check)
               (make-preview-option)
               (make-quiet-option)
               (make-recovery-option)
@@ -1111,6 +1143,9 @@
                (clingon:make-option :string :long-name "compile-check-system"
                                     :description "asdf:load-system this system before the compile check (full fidelity)"
                                     :key :compile-check-system)
+               (clingon:make-option :flag :long-name "load-check"
+                                    :description "With --compile-check: also LOAD the compiled fasl, catching evaluation-time errors (top-level forms execute!)"
+                                    :key :load-check)
               (make-preview-option)
               (make-quiet-option)
               (make-recovery-option)
@@ -1405,6 +1440,9 @@
              (clingon:make-option :string :long-name "compile-check-system"
                                   :description "asdf:load-system this system before the compile check (full fidelity)"
                                   :key :compile-check-system)
+             (clingon:make-option :flag :long-name "load-check"
+                                  :description "With --compile-check: also LOAD the compiled fasl, catching evaluation-time errors (top-level forms execute!)"
+                                  :key :load-check)
              (make-preview-option)
              (make-quiet-option)
              (make-recovery-option)
@@ -1467,6 +1505,9 @@
               (clingon:make-option :string :long-name "compile-check-system"
                                    :description "asdf:load-system this system before the compile check (full fidelity)"
                                    :key :compile-check-system)
+              (clingon:make-option :flag :long-name "load-check"
+                                   :description "With --compile-check: also LOAD the compiled fasl, catching evaluation-time errors (top-level forms execute!)"
+                                   :key :load-check)
               (make-preview-option)
               (make-quiet-option)
               (make-recovery-option)
@@ -1551,6 +1592,9 @@
               (clingon:make-option :string :long-name "compile-check-system"
                                    :description "asdf:load-system this system before the compile check (full fidelity)"
                                    :key :compile-check-system)
+              (clingon:make-option :flag :long-name "load-check"
+                                   :description "With --compile-check: also LOAD the compiled fasl, catching evaluation-time errors (top-level forms execute!)"
+                                   :key :load-check)
               (make-preview-option)
               (make-quiet-option)
               (make-recovery-option)
@@ -1751,6 +1795,9 @@
               (clingon:make-option :string :long-name "compile-check-system"
                                    :description "asdf:load-system this system before the compile check (full fidelity)"
                                    :key :compile-check-system)
+              (clingon:make-option :flag :long-name "load-check"
+                                   :description "With --compile-check: also LOAD the compiled fasl, catching evaluation-time errors (top-level forms execute!)"
+                                   :key :load-check)
               (make-preview-option)
               (make-quiet-option)
               (make-recovery-option))
@@ -1921,6 +1968,9 @@
               (clingon:make-option :string :long-name "compile-check-system"
                                    :description "asdf:load-system this system before the compile check (full fidelity)"
                                    :key :compile-check-system)
+              (clingon:make-option :flag :long-name "load-check"
+                                   :description "With --compile-check: also LOAD the compiled fasl, catching evaluation-time errors (top-level forms execute!)"
+                                   :key :load-check)
               (make-quiet-option)
               (make-recovery-option)
               (clingon:make-option :flag :long-name "no-validate-result"
@@ -2131,6 +2181,9 @@
                (clingon:make-option :string :long-name "compile-check-system"
                                     :description "asdf:load-system this system before the compile check (full fidelity)"
                                     :key :compile-check-system)
+               (clingon:make-option :flag :long-name "load-check"
+                                    :description "With --compile-check: also LOAD the compiled fasl, catching evaluation-time errors (top-level forms execute!)"
+                                    :key :load-check)
                (make-recovery-option)
                (clingon:make-option :flag :long-name "no-validate-input"
                                     :description "Skip input code validation"
@@ -2353,6 +2406,9 @@
                (clingon:make-option :string :long-name "compile-check-system"
                                     :description "asdf:load-system this system before the compile check (full fidelity)"
                                     :key :compile-check-system)
+               (clingon:make-option :flag :long-name "load-check"
+                                    :description "With --compile-check: also LOAD the compiled fasl, catching evaluation-time errors (top-level forms execute!)"
+                                    :key :load-check)
                (make-recovery-option)
                (clingon:make-option :flag :long-name "no-validate-input"
                                     :description "Skip input code validation"
