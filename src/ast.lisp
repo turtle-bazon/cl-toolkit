@@ -64,7 +64,9 @@
                                          "defgeneric" "defclass" "defstruct"
                                          "deftype" "defmethod"
                                          "define-compiler-macro" "defsetf"
-                                         "define-setf-expander" "defpackage")
+                                         "define-setf-expander" "defpackage"
+                                         ;; fiveam-style: (test NAME body...)
+                                         "test")
                              :test #'string-equal))
                 (node-name (second children)))
                ;; For other forms, return the first symbol
