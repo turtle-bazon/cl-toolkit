@@ -59,6 +59,8 @@
                 #:node-name
                 #:nodep
                 #:node-list-p
+                #:node-atom-p
+                #:node-list-p
                 #:node-error-p
                 #:node-to-json
                 #:node-to-json-string

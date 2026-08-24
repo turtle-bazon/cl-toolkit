@@ -3,6 +3,27 @@
 All notable changes to cl-toolkit. During 0.x, breaking changes are
 marked `BREAKING:`.
 
+## [0.5.1] - 2026-08-24
+
+### Fixed
+
+- **P0: extract-clause emitted illegal code for cond clauses.** A
+  (TEST BODY...) clause placed verbatim as a defun body is an illegal
+  function call — invisible to placement/lint/parse gates. Shape-based
+  auto-detection proved impossible (cond clause vs plain call are both
+  multi-child lists), so per the report's own fallback principle the
+  tool now REFUSES multi-child spans unless intent is explicit:
+  --when promotes as (when TEST BODY...); --as-expression places
+  verbatim; atoms refuse without --as-expression.
+
+### Added
+
+- **Compile gate in cli-matrix.sh**: every fixture a matrix case writes
+  is compile-filed; illegal-code generation is now a release blocker.
+  This is the product-level check that would have caught both the B1
+  class and this P0 — mechanics tests verify the tool, compilation
+  verifies its output.
+
 ## [0.5.0] - 2026-08-22
 
 ### Added

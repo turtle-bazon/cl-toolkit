@@ -75,6 +75,35 @@ check code-file-broken-append 1 "$BIN" append-form -f "$TMP/f1.lisp" --end --ins
 check write-nonexistent 1 "$BIN" replace-form -f "$TMP/nope-$$.lisp" --index 0 --replace "(x)" --write
 check unknown-command 64 "$BIN" definitely-not-a-command
 
+# --- cond-clause extraction modes (0.5.1) ---
+mk cond.lisp '(defun resolve-token (upper)
+  (cond
+    ((string= upper "TAU") (* 2 pi))
+    (t nil)))
+'
+check extract-cond-refused-without-mode 1 "$BIN" extract-clause -f "$TMP/cond.lisp" --name resolve-token --match '((string= upper "TAU") (* 2 pi))' --as tau-of --lambda-list '(u)' --call '(tau-of u)'
+check extract-cond-when-mode 0 "$BIN" extract-clause -f "$TMP/cond.lisp" --name resolve-token --match '((string= upper "TAU") (* 2 pi))' --as tau-of --lambda-list '(u)' --call '(tau-of u)' --when --write --quiet
+check extract-expr-mode 0 sh -c "cp '$TMP/base.lisp' '$TMP/expr.lisp' && $BIN extract-clause -f '$TMP/expr.lisp' --name alpha --match '1' --as one-of --lambda-list '()' --call '(one-of)' --as-expression --write --quiet"
+check extract-atom-refused 1 sh -c "cp '$TMP/base.lisp' '$TMP/atom.lisp' && $BIN extract-clause -f '$TMP/atom.lisp' --name alpha --match 'alpha' --as a2 --lambda-list '()' --call '(a2)' --write --quiet"
+
 echo "---"
+# --- PRODUCT GATE: every written fixture must COMPILE ---
+# Mechanics checks (placement/lint) passed B1 and the cond-clause P0;
+# only compiling the output catches illegal-code generation.
+if command -v sbcl >/dev/null; then
+  for f in "$TMP"/e*.lisp "$TMP"/cond.lisp "$TMP"/expr.lisp; do
+    [ -e "$f" ] || continue
+    if F="$f" OUT="$TMP/gate.fasl" sbcl --noinform --non-interactive \
+         --eval '(unless (compile-file (uiop:getenv "F") :output-file (uiop:getenv "OUT")) (uiop:quit 1))' \
+         --eval '(uiop:quit 0)' >/dev/null 2>&1; then
+      PASS=$((PASS+1))
+    else
+      FAIL=$((FAIL+1)); echo "FAIL: compile-gate $f"
+    fi
+    rm -f "$TMP/gate.fasl"
+  done
+else
+  echo "WARN: sbcl not found; compile gate skipped"
+fi
 echo "CI matrix: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -1930,6 +1930,66 @@
                  (clause (first resolved))
                  (clause-src (string-trim '(#\Space #\Tab #\Newline #\Return)
                                           (node-source-text text clause)))
+                 ;; Body-shape policy:
+                 ;;   cond clause (list, >=2 children) -> (when TEST BODY...)
+                 ;;     — the TEST governs execution; verbatim placement
+                 ;;     would emit ((TEST ...) BODY) = illegal call.
+                 ;;   single-expression spans -> verbatim (today's behavior).
+                 ;;   atoms -> refuse with guidance.
+                 (clause-ast (ignore-errors
+                              (cl-toolkit-grammar::parse-lisp-source clause-src)))
+                 (clause-forms (and clause-ast
+                                    (eq (cl-toolkit-ast::node-type clause-ast) :list)
+                                    (list-top-level clause-ast)))
+                 (when-mode (clingon:getopt cmd :when))
+                 (as-expression (clingon:getopt cmd :as-expression))
+                 (defun-body
+                   (let ((form (and clause-forms (= (length clause-forms) 1)
+                                    (first clause-forms))))
+                     (cond
+                       ((null form)
+                        (error "Refusing: --match resolved to a non-list or multi-form span ~s."
+                               (single-line-preview text clause 40)))
+                       ((and (node-list-p form)
+                             (>= (length (node-children form)) 2)
+                             (not when-mode)
+                             (not as-expression))
+                        ;; cond clause vs plain call are indistinguishable
+                        ;; by shape — refuse rather than guess (silent-
+                        ;; broken is the failure mode we exist to prevent)
+                        (error "Refusing: span ~s is a multi-child list -- could be a cond clause or a plain call. ~
+                                Pass --when to promote as (when TEST BODY...), or --as-expression to place verbatim."
+                               (single-line-preview text clause 40)))
+                       ((and (node-list-p form)
+                             (>= (length (node-children form)) 2)
+                             when-mode)
+                        ;; cond clause: (when TEST BODY...)
+                        (let* ((kids (node-children form))
+                               ;; clause-ast offsets index into CLAUSE-SRC,
+                               ;; not the full file
+                               (test-src (string-trim
+                                          '(#\Space #\Tab #\Newline #\Return)
+                                          (subseq clause-src
+                                                  (node-start (first kids))
+                                                  (node-end (first kids)))))
+                               (body-srcs (mapcar
+                                           (lambda (k)
+                                             (string-trim
+                                              '(#\Space #\Tab #\Newline #\Return)
+                                              (subseq clause-src
+                                                      (node-start k)
+                                                      (node-end k))))
+                                           (rest kids))))
+                          (with-output-to-string (out)
+                            (format out "(when ~a" test-src)
+                            (dolist (b body-srcs)
+                              (format out "~%    ~a" b))
+                            (format out ")"))))
+                       ((and (node-atom-p form) (not as-expression))
+                        (error "Refusing: --match resolved to an atom ~s. ~
+                                Pass --as-expression to place it verbatim."
+                               (single-line-preview text clause 40)))
+                       (t clause-src))))
                  ;; 1) host with clause replaced by the call
                  (call-form (or code call))
                  (host-prime (splice-replacement text clause call-form))
@@ -1937,7 +1997,7 @@
                  (defun-src (format nil "(defun ~a ~a~%  ~a)"
                                     new-name
                                     lambda-list
-                                    clause-src))
+                                    defun-body))
                  ;; 3) place the defun right after the (modified) host
                  (host-prime-node (or (find-top-level-by-name host-prime name :recovery recovery)
                                       (error "Host vanished after splice")))
@@ -1994,6 +2054,12 @@
                                    :description "Lambda list for the new defun, e.g. (tok)" :key :lambda-list)
               (clingon:make-option :string :long-name "call"
                                    :description "Replacement call form, e.g. (g tok)" :key :call)
+              (clingon:make-option :flag :long-name "when"
+                                   :description "Span is a cond clause: emit body as (when TEST BODY...)"
+                                   :key :when)
+              (clingon:make-option :flag :long-name "as-expression"
+                                   :description "Span is a plain expression: place verbatim"
+                                   :key :as-expression)
               (clingon:make-option :string :long-name "replace" :short-name #\r
                                    :description "Alias for --call" :key :insert-code)
               (clingon:make-option :string :long-name "code-file"
@@ -2022,7 +2088,7 @@
 
 (defun version/handler (cmd)
   (declare (ignore cmd))
-  (format *standard-output* "cl-toolkit 0.5.0~%"))
+  (format *standard-output* "cl-toolkit 0.5.1~%"))
 
 (defun version/command ()
   (clingon:make-command
@@ -2049,7 +2115,7 @@
   "Returns the top-level cl-toolkit command."
   (clingon:make-command
    :name "cl-toolkit"
-   :version "0.5.0"
+   :version "0.5.1"
    :description "Lisp code parser for structural analysis and editing. All positions are 0-based (grep -n counts from 1)."
    :long-description "A CLI tool for parsing, querying, and editing Lisp source code ~
                       using structural AST operations. Supports standard and ~
