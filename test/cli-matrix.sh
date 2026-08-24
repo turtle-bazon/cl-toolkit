@@ -67,6 +67,10 @@ check extract-atomic 0 sh -c "cp '$TMP/base.lisp' '$TMP/e8.lisp' && $BIN extract
 check extract-missing-clause 1 "$BIN" extract-clause -f "$TMP/base.lisp" --name beta --match "(zzz)" --as g --lambda-list "()" --call "(g)"
 check select-path 0 sh -c "$BIN source-of -f '$TMP/base.lisp' --name beta --select '3/0' >/dev/null"
 check select-bad-path 1 "$BIN" source-of -f "$TMP/base.lisp" --name beta --select "9/9"
+# batch-replace match ops (0.5.5) — B1 lesson: prove features, don't announce them
+check batch-replace-match 0 sh -c "cp '$TMP/base.lisp' '$TMP/bm.lisp' && $BIN batch-replace -f '$TMP/bm.lisp' --edits '[{\"operation\":\"replace-match\",\"match\":\"(gamma)\",\"code\":\"(delta)\"}]' --write --quiet && grep -c '(delta)' '$TMP/bm.lisp' | grep -q 1"
+check batch-replace-match-ambiguous 1 sh -c "$BIN batch-replace -f '$TMP/base.lisp' --edits '[{\"operation\":\"replace-match\",\"match\":\"a\",\"code\":\"z\"}]' --write --quiet"
+check batch-replace-delete-match 0 sh -c "cp '$TMP/base.lisp' '$TMP/bd.lisp' && $BIN batch-replace -f '$TMP/bd.lisp' --edits '[{\"operation\":\"delete-match\",\"match\":\"(gamma)\"}]' --write --quiet && ! grep -q gamma '$TMP/bd.lisp'"
 check occurrence-select 0 sh -c "$BIN replace-form -f '$TMP/base.lisp' --name alpha --match '1' --occurrence 1 --replace '2' --preview >/dev/null 2>&1"
 check match-ambiguous 1 "$BIN" replace-form -f "$TMP/f1.lisp" --name beta --match "a" --replace "z"
 check match-ambiguous-first 0 sh -c "$BIN replace-form -f '$TMP/f1.lisp' --name beta --match 'a' --replace 'z' --first --preview >/dev/null 2>&1"

@@ -593,14 +593,46 @@
                  code
                  (subseq text end))))
 
+(defun edit-replace-match (text edit &optional recovery)
+  "Apply a :replace-match EDIT to TEXT — unique subform anywhere,
+   same ambiguity policy as --match targeting (:first/:occurrence).
+   Contains-level matches refuse unless :allow-fuzzy is set."
+  (multiple-value-bind (node host fuzzy)
+      (find-subform-globally text (getf edit :match)
+                             :match-exact (getf edit :match-exact)
+                             :first (getf edit :first)
+                             :occurrence (getf edit :occurrence)
+                             :recovery recovery)
+    (declare (ignore host))
+    (when (and fuzzy (not (getf edit :allow-fuzzy)))
+      (error "Match for ~s is contains-level; refine the snippet or pass :allow-fuzzy"
+             (getf edit :match)))
+    (splice-replacement text node (getf edit :code))))
+
+(defun edit-delete-match (text edit &optional recovery)
+  "Apply a :delete-match EDIT to TEXT — remove the unique matched subform."
+  (multiple-value-bind (node host fuzzy)
+      (find-subform-globally text (getf edit :match)
+                             :match-exact (getf edit :match-exact)
+                             :first (getf edit :first)
+                             :occurrence (getf edit :occurrence)
+                             :recovery recovery)
+    (declare (ignore host))
+    (when (and fuzzy (not (getf edit :allow-fuzzy)))
+      (error "Match for ~s is contains-level; refine the snippet or pass :allow-fuzzy"
+             (getf edit :match)))
+    (delete-node-from-text text node)))
+
 (defun apply-single-edit (text edit &key recovery)
   "Apply a single EDIT plist to TEXT.
-   EDIT is a plist with :operation, :code, and either :name, :index,
-   or :line/:col. Returns the modified text."
+   EDIT is a plist with :operation, :code, and either :name, :match,
+   :index, or :line/:col. Returns the modified text."
   (case (getf edit :operation)
     (:replace-name (edit-replace-name text edit recovery))
     (:delete-name (edit-delete-name text edit recovery))
     (:insert-after-name (edit-insert-after-name text edit recovery))
+    (:replace-match (edit-replace-match text edit recovery))
+    (:delete-match (edit-delete-match text edit recovery))
     (:replace-index (edit-replace-index text edit recovery))
     (:replace-position (edit-replace-position text edit recovery))
     (:delete-index (edit-delete-index text edit recovery))
