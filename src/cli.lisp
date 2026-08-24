@@ -1498,7 +1498,7 @@
   (clingon:make-command
    :name "move-form"
    :usage "(-f FILE | --code CODE) --from-line L1 --from-col C1 --to-line L2 --to-col C2"
-   :description "Move form from (L1,C1) to after (L2,C2)"
+   :description "Move form from (L1,C1) to after (L2,C2); name-based form recommended with --compile-check --load-check (moves can cross definition-order boundaries)"
    :options (list
              (clingon:make-option :string :long-name "file" :short-name #\f
                                   :description "File to edit" :key :file)
