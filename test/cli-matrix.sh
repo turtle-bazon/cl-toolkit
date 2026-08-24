@@ -76,6 +76,13 @@ check write-nonexistent 1 "$BIN" replace-form -f "$TMP/nope-$$.lisp" --index 0 -
 # D4: compile-check rolls back illegal-code output (file must survive untouched)
 check compile-check-rollback 1 sh -c "cp '$TMP/base.lisp' '$TMP/cc.lisp' && cp '$TMP/cc.lisp' '$TMP/cc.orig' && $BIN replace-form -f '$TMP/cc.lisp' --name beta --replace '(defun beta () ((string= \"a\" \"a\") 1))' --compile-check --write --quiet >/dev/null 2>&1; diff -q '$TMP/cc.lisp' '$TMP/cc.orig' >/dev/null"
 check compile-check-pass 0 sh -c "cp '$TMP/base.lisp' '$TMP/cc2.lisp' && $BIN replace-form -f '$TMP/cc2.lisp' --name alpha --replace '(defun alpha () (function list))' --compile-check --write --quiet"
+# project-package files: read-time in-package error without the stub, pass with it
+mk proj.lisp '(in-package #:calc)
+
+(defun calc-fn (x) (* x 2))
+'
+check cc-proj-no-flag 1 "$BIN" replace-form -f "$TMP/proj.lisp" --name calc-fn --replace '(defun calc-fn (x) (* x 3))' --compile-check --write --quiet
+check cc-proj-package-flag 0 "$BIN" replace-form -f "$TMP/proj.lisp" --name calc-fn --replace '(defun calc-fn (x) (* x 3))' --compile-check --compile-check-package calc --write --quiet
 check unknown-command 64 "$BIN" definitely-not-a-command
 
 # --- cond-clause extraction modes (0.5.1) ---

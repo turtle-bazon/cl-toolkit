@@ -97,15 +97,30 @@
 (defvar *no-backup* nil)
 (defvar *backup-dir* nil)
 (defvar *compile-check* nil)
+(defvar *compile-check-package* nil)
+(defvar *compile-check-system* nil)
 
 (defun compile-file-ok-p (file)
   "Compile FILE in-process to a throwaway fasl.
    Returns (values t nil) on success, (values nil reason) on failure.
    In-process is deliberate: no subprocess quoting, and error severity
-   (illegal calls) is exactly what the B1/P0 class needs caught."
+   (illegal calls) is exactly what the B1/P0 class needs caught.
+
+   Pre-steps for project files (whose (in-package #:proj) is a read-time
+   error in this image):
+   * --compile-check-system SYS: asdf:load-system SYS first (full
+     fidelity — sibling packages exist).
+   * --compile-check-package PKG: stub-create PKG (:use CL) when
+     missing — handles single-file-against-project-package checks."
   (let ((fasl (format nil "/tmp/ctk-compile-check-~d.fasl" (get-universal-time))))
     (handler-case
         (progn
+          (when *compile-check-system*
+            (asdf:load-system *compile-check-system* :verbose nil))
+          (when *compile-check-package*
+            (let ((pkg-name (string-upcase *compile-check-package*)))
+              (unless (find-package pkg-name)
+                (make-package pkg-name :use '(:common-lisp)))))
           (compile-file file :output-file fasl)
           (ignore-errors (delete-file fasl))
           (values t nil))
@@ -304,14 +319,19 @@
           (backup-dir (clingon:getopt ,cmd :backup-dir))
           (no-backup (clingon:getopt ,cmd :no-backup))
           (compile-check (clingon:getopt ,cmd :compile-check))
+          (cc-package (clingon:getopt ,cmd :compile-check-package))
+          (cc-system (clingon:getopt ,cmd :compile-check-system))
           (file (resolve-file-path (clingon:getopt ,cmd :file)))
           (text (read-input ,cmd))
           (original-text (when file (read-file-to-string file))))
      ;; backup policy for this invocation
      (let ((*no-backup* no-backup)
            (*backup-dir* (when backup-dir (resolve-file-path backup-dir)))
-           (*compile-check* compile-check))
-       (declare (special *no-backup* *backup-dir* *compile-check*))
+           (*compile-check* compile-check)
+           (*compile-check-package* cc-package)
+           (*compile-check-system* cc-system))
+       (declare (special *no-backup* *backup-dir* *compile-check*
+                         *compile-check-package* *compile-check-system*))
        ,@body)))
 
 (defun single-line-preview (text node &optional (max-chars 60))
@@ -722,6 +742,12 @@
               (clingon:make-option :flag :long-name "compile-check"
                                    :description "After --write, compile the file and roll back to backup on error"
                                    :key :compile-check)
+              (clingon:make-option :string :long-name "compile-check-package"
+                                   :description "Stub-create this package before the compile check (single-file checks against project packages)"
+                                   :key :compile-check-package)
+              (clingon:make-option :string :long-name "compile-check-system"
+                                   :description "asdf:load-system this system before the compile check (full fidelity)"
+                                   :key :compile-check-system)
               (make-quiet-option))
     :handler #'format/handler))
 
@@ -815,6 +841,12 @@
               (clingon:make-option :flag :long-name "compile-check"
                                    :description "After --write, compile the file and roll back to backup on error"
                                    :key :compile-check)
+              (clingon:make-option :string :long-name "compile-check-package"
+                                   :description "Stub-create this package before the compile check (single-file checks against project packages)"
+                                   :key :compile-check-package)
+              (clingon:make-option :string :long-name "compile-check-system"
+                                   :description "asdf:load-system this system before the compile check (full fidelity)"
+                                   :key :compile-check-system)
               (make-preview-option)
               (make-quiet-option)
                (make-recovery-option)
@@ -879,6 +911,12 @@
               (clingon:make-option :flag :long-name "compile-check"
                                    :description "After --write, compile the file and roll back to backup on error"
                                    :key :compile-check)
+              (clingon:make-option :string :long-name "compile-check-package"
+                                   :description "Stub-create this package before the compile check (single-file checks against project packages)"
+                                   :key :compile-check-package)
+              (clingon:make-option :string :long-name "compile-check-system"
+                                   :description "asdf:load-system this system before the compile check (full fidelity)"
+                                   :key :compile-check-system)
               (make-preview-option)
               (make-quiet-option))
    :handler #'insert-at/handler))
@@ -945,6 +983,12 @@
                (clingon:make-option :flag :long-name "compile-check"
                                     :description "After --write, compile the file and roll back to backup on error"
                                     :key :compile-check)
+               (clingon:make-option :string :long-name "compile-check-package"
+                                    :description "Stub-create this package before the compile check (single-file checks against project packages)"
+                                    :key :compile-check-package)
+               (clingon:make-option :string :long-name "compile-check-system"
+                                    :description "asdf:load-system this system before the compile check (full fidelity)"
+                                    :key :compile-check-system)
               (make-preview-option)
               (make-quiet-option)
               (make-recovery-option)
@@ -1048,6 +1092,12 @@
                (clingon:make-option :flag :long-name "compile-check"
                                     :description "After --write, compile the file and roll back to backup on error"
                                     :key :compile-check)
+               (clingon:make-option :string :long-name "compile-check-package"
+                                    :description "Stub-create this package before the compile check (single-file checks against project packages)"
+                                    :key :compile-check-package)
+               (clingon:make-option :string :long-name "compile-check-system"
+                                    :description "asdf:load-system this system before the compile check (full fidelity)"
+                                    :key :compile-check-system)
               (make-preview-option)
               (make-quiet-option)
               (make-recovery-option)
@@ -1290,6 +1340,12 @@
              (clingon:make-option :flag :long-name "compile-check"
                                   :description "After --write, compile the file and roll back to backup on error"
                                   :key :compile-check)
+             (clingon:make-option :string :long-name "compile-check-package"
+                                  :description "Stub-create this package before the compile check (single-file checks against project packages)"
+                                  :key :compile-check-package)
+             (clingon:make-option :string :long-name "compile-check-system"
+                                  :description "asdf:load-system this system before the compile check (full fidelity)"
+                                  :key :compile-check-system)
              (make-preview-option)
              (make-quiet-option)
              (make-recovery-option)
@@ -1346,6 +1402,12 @@
               (clingon:make-option :flag :long-name "compile-check"
                                    :description "After --write, compile the file and roll back to backup on error"
                                    :key :compile-check)
+              (clingon:make-option :string :long-name "compile-check-package"
+                                   :description "Stub-create this package before the compile check (single-file checks against project packages)"
+                                   :key :compile-check-package)
+              (clingon:make-option :string :long-name "compile-check-system"
+                                   :description "asdf:load-system this system before the compile check (full fidelity)"
+                                   :key :compile-check-system)
               (make-preview-option)
               (make-quiet-option)
               (make-recovery-option)
@@ -1424,6 +1486,12 @@
               (clingon:make-option :flag :long-name "compile-check"
                                    :description "After --write, compile the file and roll back to backup on error"
                                    :key :compile-check)
+              (clingon:make-option :string :long-name "compile-check-package"
+                                   :description "Stub-create this package before the compile check (single-file checks against project packages)"
+                                   :key :compile-check-package)
+              (clingon:make-option :string :long-name "compile-check-system"
+                                   :description "asdf:load-system this system before the compile check (full fidelity)"
+                                   :key :compile-check-system)
               (make-preview-option)
               (make-quiet-option)
               (make-recovery-option)
@@ -1594,6 +1662,12 @@
               (clingon:make-option :flag :long-name "compile-check"
                                    :description "After --write, compile the file and roll back to backup on error"
                                    :key :compile-check)
+              (clingon:make-option :string :long-name "compile-check-package"
+                                   :description "Stub-create this package before the compile check (single-file checks against project packages)"
+                                   :key :compile-check-package)
+              (clingon:make-option :string :long-name "compile-check-system"
+                                   :description "asdf:load-system this system before the compile check (full fidelity)"
+                                   :key :compile-check-system)
               (make-preview-option)
               (make-quiet-option)
               (make-recovery-option))
@@ -1758,6 +1832,12 @@
               (clingon:make-option :flag :long-name "compile-check"
                                    :description "After --write, compile the file and roll back to backup on error"
                                    :key :compile-check)
+              (clingon:make-option :string :long-name "compile-check-package"
+                                   :description "Stub-create this package before the compile check (single-file checks against project packages)"
+                                   :key :compile-check-package)
+              (clingon:make-option :string :long-name "compile-check-system"
+                                   :description "asdf:load-system this system before the compile check (full fidelity)"
+                                   :key :compile-check-system)
               (make-quiet-option)
               (make-recovery-option)
               (clingon:make-option :flag :long-name "no-validate-result"
@@ -1959,6 +2039,12 @@
                (clingon:make-option :flag :long-name "compile-check"
                                     :description "After --write, compile the file and roll back to backup on error"
                                     :key :compile-check)
+               (clingon:make-option :string :long-name "compile-check-package"
+                                    :description "Stub-create this package before the compile check (single-file checks against project packages)"
+                                    :key :compile-check-package)
+               (clingon:make-option :string :long-name "compile-check-system"
+                                    :description "asdf:load-system this system before the compile check (full fidelity)"
+                                    :key :compile-check-system)
                (make-recovery-option)
                (clingon:make-option :flag :long-name "no-validate-input"
                                     :description "Skip input code validation"
@@ -2145,6 +2231,12 @@
                (clingon:make-option :flag :long-name "compile-check"
                                     :description "After --write, compile the file and roll back to backup on error"
                                     :key :compile-check)
+               (clingon:make-option :string :long-name "compile-check-package"
+                                    :description "Stub-create this package before the compile check (single-file checks against project packages)"
+                                    :key :compile-check-package)
+               (clingon:make-option :string :long-name "compile-check-system"
+                                    :description "asdf:load-system this system before the compile check (full fidelity)"
+                                    :key :compile-check-system)
                (make-recovery-option)
                (clingon:make-option :flag :long-name "no-validate-input"
                                     :description "Skip input code validation"
@@ -2159,7 +2251,7 @@
 
 (defun version/handler (cmd)
   (declare (ignore cmd))
-  (format *standard-output* "cl-toolkit 0.5.2~%"))
+  (format *standard-output* "cl-toolkit 0.5.3~%"))
 
 (defun version/command ()
   (clingon:make-command
@@ -2186,7 +2278,7 @@
   "Returns the top-level cl-toolkit command."
   (clingon:make-command
    :name "cl-toolkit"
-   :version "0.5.2"
+   :version "0.5.3"
    :description "Lisp code parser for structural analysis and editing. All positions are 0-based (grep -n counts from 1)."
    :long-description "A CLI tool for parsing, querying, and editing Lisp source code ~
                       using structural AST operations. Supports standard and ~

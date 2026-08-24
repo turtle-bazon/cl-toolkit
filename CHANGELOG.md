@@ -3,6 +3,27 @@
 All notable changes to cl-toolkit. During 0.x, breaking changes are
 marked `BREAKING:`.
 
+## [0.5.3] - 2026-08-24
+
+### Fixed
+
+- **P1: --compile-check false-positived on every multi-file-project
+  file.** Compiling in cl-toolkit's image made (in-package #:proj) a
+  read-time error, so files depending on sibling packages could never
+  pass. Two flags, cheapest-first per field report:
+  - --compile-check-package PKG: stub-creates PKG (:use CL) when
+    missing — the single-file-against-project-package case.
+  - --compile-check-system SYS: asdf:load-system SYS first — full
+    fidelity for real systems. Flags compose.
+  Rollback behavior unchanged and re-verified byte-identical.
+
+### Corrected
+
+- Anomaly diagnosis in 0.5.2 notes was too narrow: field evidence
+  reproduces the unbound-variable failures in fresh processes,
+  deterministically per script shape — not an image-hygiene artifact.
+  Reproduction scripts: /tmp/opencode/int44-int62b.
+
 ## [0.5.2] - 2026-08-24
 
 ### Added
