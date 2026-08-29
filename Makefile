@@ -21,7 +21,6 @@ build: $(wildcard src/*.lisp) cl-toolkit.asd
 	        --eval '(push #P"./" asdf:*central-registry*)' \
 	        --eval '(asdf:operate (quote asdf:program-op) :cl-toolkit/bin)' \
 	        --eval '(ext:quit)'
-	mv -f cl-toolkit $(TARGET)
 
 ci: build
 	@bash test/cli-matrix.sh ./build/cl-toolkit
@@ -50,7 +49,6 @@ install: build
 
 clean:
 	rm -rf $(BUILD_DIR)
-	rm -f cl-toolkit
 	rm -f *.fasl *.dx64fsl *.lx64fsl
 	rm -f src/*.fasl src/*.dx64fsl src/*.lx64fsl
 	rm -f test/*.fasl test/*.dx64fsl test/*.lx64fsl

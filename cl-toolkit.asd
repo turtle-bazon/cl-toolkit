@@ -21,7 +21,7 @@
   :description "cl-toolkit binary build"
   :depends-on (#:cl-toolkit)
   :build-operation program-op
-  :build-pathname "cl-toolkit"
+  :build-pathname "build/cl-toolkit"
   :entry-point "cl-toolkit:cl-toolkit-main")
 
 (defsystem #:cl-toolkit/tests
