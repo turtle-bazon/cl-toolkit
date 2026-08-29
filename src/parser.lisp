@@ -450,6 +450,7 @@
 (defun node-at-path (text node path)
   "Follow a slash-separated child-index PATH (e.g. \"3/0/1\") from NODE.
    Returns the deepest node, or NIL when any step is out of range."
+  (declare (ignore text))
   (let ((current node))
     (dolist (step (mapcar #'parse-integer
                           (split-string-on-char path #\/)))
@@ -932,6 +933,7 @@
 (defun balance-check-close (ch line col depth errors kind)
   "Check for unexpected closing delimiter and record error if needed.
    Returns (values new-depth new-errors)."
+  (declare (ignore ch))
   (if (zerop depth)
       (values depth
               (push (list :line line :col col
@@ -958,6 +960,7 @@
 
 (defun balance-process-string (ch i text line col)
   "Process character inside string. Returns updated state."
+  (declare (ignore text))
   (let ((new-i i) (new-line line) (new-col (1+ col)) (ended nil))
     (when (char= ch #\Newline)
       (setf new-line (1+ line) new-col 1))
@@ -1022,8 +1025,10 @@
 
 (defun balance-dispatch-line-comment (ch i text line col depth line-start-depth lines mode)
   "Dispatch line comment mode. Returns updated state values."
+  (declare (ignore text))
   (multiple-value-bind (ended new-lines new-line new-col)
       (balance-process-line-comment ch line col depth line-start-depth lines)
+    (declare (ignore new-line new-col))
     (when ended
       (setf lines new-lines line-start-depth depth)
       (incf line) (setf col 1)
@@ -1035,6 +1040,7 @@
   "Dispatch block comment mode. Returns updated state values."
   (multiple-value-bind (ended ni nl nc)
       (balance-process-block-comment ch i text line col)
+    (declare (ignore nl nc))
     (when ended (setf i ni))
     (when (char= ch #\Newline)
       (setf line (1+ line) col 1))
@@ -1045,6 +1051,7 @@
   "Dispatch string mode. Returns updated state values."
   (multiple-value-bind (ended ni nl nc)
       (balance-process-string ch i text line col)
+    (declare (ignore nl nc))
     (when ended (setf i ni mode :normal))
     (when (char= ch #\Newline)
       (setf line (1+ line) col 1))
@@ -1167,6 +1174,7 @@
     ((and (< (1+ i) (length text))
           (char= (char text (1+ i)) #\|))
      (multiple-value-bind (lp ni) (format-apply-indent depth indent result line-pos need-indent)
+       (declare (ignore ni))
        (write-char ch result) (incf lp)
        (write-char (char text (1+ i)) result) (incf i) (incf lp)
        (values i lp nil :block-comment)))
@@ -1174,6 +1182,7 @@
     ((and (< (1+ i) (length text))
           (char= (char text (1+ i)) #\\))
      (multiple-value-bind (lp ni) (format-apply-indent depth indent result line-pos need-indent)
+       (declare (ignore ni))
        (write-char ch result) (incf lp)
        (write-char (char text (1+ i)) result) (incf i) (incf lp)
        (incf i)  ; skip past \ to the character name / char itself
@@ -1188,18 +1197,21 @@
     ;; Other # dispatch
     (t
      (multiple-value-bind (lp ni) (format-apply-indent depth indent result line-pos need-indent)
+       (declare (ignore ni))
        (write-char ch result) (incf lp)
        (values i lp nil :normal)))))
 
 (defun format-process-open-delimiter (ch depth indent result line-pos need-indent)
   "Process opening delimiter. Returns (values new-line-pos new-need-indent new-depth)."
   (multiple-value-bind (lp ni) (format-apply-indent depth indent result line-pos need-indent)
+    (declare (ignore ni))
     (write-char ch result) (incf lp)
     (values lp nil (1+ depth))))
 
 (defun format-process-close-delimiter (ch depth indent result line-pos need-indent)
   "Process closing delimiter. Returns (values new-line-pos new-need-indent new-depth).
    Clamps depth to 0 — unmatched close delimiters don't make depth negative."
+  (declare (ignore indent need-indent))
   (let ((new-depth (max 0 (1- depth))))
     (write-char ch result)
     (values (1+ line-pos) nil new-depth)))
@@ -1232,6 +1244,7 @@
 
 (defun format-dispatch-space (ch i text depth indent result line-pos need-indent)
   "Dispatch whitespace character. Returns updated state."
+  (declare (ignore ch depth indent))
   (unless need-indent
     (write-char #\Space result) (incf line-pos)
     (loop while (and (< (1+ i) (length text))
@@ -1243,6 +1256,7 @@
   "Dispatch # character. Returns updated state."
   (multiple-value-bind (ni lp nindent nmode)
       (format-process-hash ch i text depth indent result line-pos need-indent)
+    (declare (ignore nindent))
     (values ni lp need-indent (or nmode mode))))
 
 (defun format-dispatch-delimiter (ch depth indent result line-pos need-indent openp)
@@ -1353,6 +1367,7 @@
              (col (getf edit :col))
              (code (getf edit :code))
              (after (getf edit :after)))
+         (declare (ignore after))
          (insert-form-at text line col code)))
       (:insert-end
        (let ((code (getf edit :code)))

@@ -149,6 +149,7 @@
     (and integer-part float-exponent not-symbol-tail-char)
   (:lambda (result)
     (destructuring-bind (int exp _) result
+      (declare (ignore _))
       (float (* int (expt 10 exp)) 1.0d0))))
 
 (defrule plain-integer
@@ -183,7 +184,7 @@
 (defrule sharp-dispatch
     (and "#" vector-form)
   (:destructure (sharp vec &bounds start end)
-    (declare (ignore sharp))
+    (declare (ignore sharp start end))
     vec))
 
 ;;; Symbol. May start with a digit only if the whole token is not a

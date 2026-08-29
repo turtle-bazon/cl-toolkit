@@ -361,6 +361,14 @@
           (file (resolve-file-path (clingon:getopt ,cmd :file)))
           (text (read-input ,cmd))
           (original-text (when file (read-file-to-string file))))
+     (declare (ignorable line col index name end pretty write preview quiet
+                         recovery no-validate-input no-validate-result
+                         raw-match match-file match nearest contains-arg
+                         match-exact after-anchor find-old first-flag
+                         replace-file occurrence allow-multi-forms
+                         backup-dir no-backup compile-check cc-package
+                         cc-system load-check file text original-text
+                         ,@(when code-key '(raw-code code-file code))))
      ;; backup policy for this invocation
      (let ((*no-backup* no-backup)
            (*backup-dir* (when backup-dir (resolve-file-path backup-dir)))
@@ -1191,14 +1199,12 @@
                    (cond
                      ((string= trimmed snippet) (push child exact))
                      ((search snippet raw) (push child contains)))
-                   (collect child)))))
+                   (collect child))))
+             (by-size (nodes)
+               (sort nodes #'<
+                     :key #'(lambda (n) (- (node-end n) (node-start n))))))
       (collect node)
-      (let ((by-size (lambda (a b) (< (- (node-end a) (node-start a))
-                                      (- (node-end b) (node-start b))))))
-        (values (sort (sort exact #'< :key #'node-start) #'<
-                      :key #'(lambda (n) (- (node-end n) (node-start n))))
-                (sort (sort contains #'< :key #'node-start) #'<
-                      :key #'(lambda (n) (- (node-end n) (node-start n)))))))))
+      (values (by-size exact) (by-size contains)))))
 
 (defun describe-candidates (text nodes)
   "One-line-per-candidate position/preview listing for ambiguity refusals."
