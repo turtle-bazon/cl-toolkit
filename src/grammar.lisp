@@ -168,21 +168,103 @@
                  :value (if (and sign (string= sign "-")) (- val) val)
                  :start start :end end))))
 
-;;; Character literal
-(defrule char-name
-    ;; Two or more letters: single alphabetic chars (e.g. #\a, #\λ) fall
-    ;; through to the `character' branch preserving case; upcasing only
-    ;; applies to multi-char names (Space, Newline, ...).
-    (and alpha (+ alpha))
+;;; Character literal names. SBCL-verified set: 15 full names plus the
+;;; traditional short forms Bel Esc Del Alt Sp Cr Lf Bs Ht (Maclisp
+;;; heritage — "Sp ace" reads as Space!). Clear/Meta/Control/Hyper/
+;;; Super/Shift, Lock's non-existent shorts (Lk/Lck) and any other
+;;; multi-alpha token (#\AB) are NOT names.
+;;; Spelled with per-letter case pairs (esrap strings are
+;;; case-sensitive); longest match first within each family (Null
+;;; before Nul, Bell before Bel, ...). Value keeps upcased convention.
+(defrule char-known-name
+    (or (and (or #\N #\n) (or #\U #\u) (or #\L #\l) (or #\L #\l))
+        (and (or #\N #\n) (or #\U #\u) (or #\L #\l))
+        (and (or #\B #\b) (or #\E #\e) (or #\L #\l) (or #\L #\l))
+        (and (or #\B #\b) (or #\E #\e) (or #\L #\l))
+        (and (or #\B #\b) (or #\A #\a) (or #\C #\c) (or #\K #\k)
+             (or #\S #\s) (or #\P #\p) (or #\A #\a) (or #\C #\c)
+             (or #\E #\e))
+        (and (or #\B #\b) (or #\S #\s))
+        (and (or #\T #\t) (or #\A #\a) (or #\B #\b))
+        (and (or #\N #\n) (or #\E #\e) (or #\W #\w) (or #\L #\l)
+             (or #\I #\i) (or #\N #\n) (or #\E #\e))
+        (and (or #\L #\l) (or #\I #\i) (or #\N #\n) (or #\E #\e)
+             (or #\F #\f) (or #\E #\e) (or #\E #\e) (or #\D #\d))
+        (and (or #\L #\l) (or #\F #\f))
+        (and (or #\P #\p) (or #\A #\a) (or #\G #\g) (or #\E #\e))
+        (and (or #\R #\r) (or #\E #\e) (or #\T #\t) (or #\U #\u)
+             (or #\R #\r) (or #\N #\n))
+        (and (or #\C #\c) (or #\R #\r))
+        (and (or #\E #\e) (or #\S #\s) (or #\C #\c) (or #\A #\a)
+             (or #\P #\p) (or #\E #\e))
+        (and (or #\E #\e) (or #\S #\s) (or #\C #\c))
+        (and (or #\S #\s) (or #\P #\p) (or #\A #\a) (or #\C #\c)
+             (or #\E #\e))
+        (and (or #\S #\s) (or #\P #\p))
+        (and (or #\R #\r) (or #\U #\u) (or #\B #\b) (or #\O #\o)
+             (or #\U #\u) (or #\T #\t))
+        (and (or #\D #\d) (or #\E #\e) (or #\L #\l) (or #\E #\e)
+             (or #\T #\t) (or #\E #\e))
+        (and (or #\D #\d) (or #\E #\e) (or #\L #\l))
+        (and (or #\A #\a) (or #\L #\l) (or #\T #\t) (or #\M #\m)
+             (or #\O #\o) (or #\D #\d) (or #\E #\e))
+        (and (or #\A #\a) (or #\L #\l) (or #\T #\t))
+        (and (or #\L #\l) (or #\O #\o) (or #\C #\c) (or #\K #\k))
+        (and (or #\H #\h) (or #\T #\t)))
   (:lambda (chars)
     (string-upcase (esrap:text chars))))
 
+;;; What can EXTEND a character name past its first char (SBCL-probed
+;;; over every printable ASCII follower). Only whitespace, the
+;;; delimiters " ' ( ) , ; ` and EOF end the name; everything else
+;;; continues it, so "#\AB", "#\A{" and "#\ |" must NOT read as
+;;; singles. A trailing backslash extends too (hence not "\X" but "\").
+(defrule char-name-continue
+    (or alphanumeric
+        #\\
+        #\! #\# #\$ #\% #\& #\* #\+ #\- #\. #\/ #\: #\< #\= #\>
+        #\? #\@ #\[ #\] #\^ #\_ #\{ #\} #\| #\~))
+
+;;; Whitespace that may follow "#\" directly (the Space/Tab/... char).
+;;; The char AFTER it must be innocent (whitespace, EOF, or an opening
+;;; delimiter/quote/comment starter) — otherwise SBCL reads on into an
+;;; unknown name (" #)", " a") and errors.
+(defrule char-ws-follow-ok
+    (or #\Space #\Tab #\Newline #\Page #\Return
+        (! character)
+        #\( #\) #\" #\' #\` #\, #\;))
+
+(defrule char-ws-name
+    (and (or #\Space #\Tab #\Newline #\Page #\Return)
+         (& char-ws-follow-ok))
+  (:lambda (parts)
+    (first parts)))
+
+;;; Any other single character is the literal itself: printable
+;;; punctuation, backslash, control codes and non-alphanumeric Unicode
+;;; alike. The lookahead is what forbids "#\AB" — the "A" is consumed,
+;;; then "B" would extend the name.
+(defrule char-graphic
+    (and character (! char-name-continue))
+  (:lambda (parts)
+    (first parts)))
+
+;;; A known name only counts when nothing extends it, so "#\Space!"
+;;; and "#\Nulx" fail instead of degrading to a char plus a symbol.
+(defrule char-known-stopped
+    (and char-known-name (! char-name-continue))
+  (:lambda (parts)
+    (first parts)))
+
 (defrule char-literal
-    (and "#\\" (or char-name character))
-  (:destructure (prefix char &bounds start end)
-    (declare (ignore prefix))
-    (let ((val (if (stringp char) char (string char))))
-      (make-node :char :value val :start start :end end))))
+    (and "#\\" (or char-known-stopped char-ws-name char-graphic))
+  (:lambda (parts &bounds start end)
+    ;; Known names arrive upcased from their rule; singles keep exact
+    ;; case (#\a stays "a").
+    (destructuring-bind (prefix value) parts
+      (declare (ignore prefix))
+      (make-node :char :value (if (stringp value) value (string value))
+                 :start start :end end))))
 
 ;;; Dispatch after a leading '#'. The '#' itself is already consumed here,
 ;;; so only sub-rules NOT starting with '#' belong in this choice.
@@ -235,7 +317,10 @@
     (esrap:text chars)))
 
 (defrule symbol
-    (and symbol-head (* symbol-tail-char))
+    ;; A "#\" prefix always means char-literal-or-bust: without this
+    ;; guard an invalid "#\AB" would degrade into a "#" symbol plus
+    ;; trailing forms instead of failing the enclosing form.
+    (and (! "#\\") symbol-head (* symbol-tail-char))
   (:lambda (chars &bounds start end)
     (let ((full (esrap:text chars)))
       ;; Split on the LAST colon so "foo::bar" yields package "foo",
@@ -379,7 +464,7 @@
 (defrule array-form
     (and "#" (* digit) (or "A" "a") ws form)
   (:destructure (hash rank letter ws payload &bounds start end)
-    (declare (ignore hash ws))
+    (declare (ignore hash letter ws))
     (make-node :list
                :children (list (make-node :symbol :name "ARRAY"
                                           :start start
@@ -494,9 +579,11 @@
 ;;; creates ERROR nodes for malformed regions and continues.
 
 (defun find-next-form-boundary (text pos end)
-  "Find the position after the next form boundary starting from POS."
+  "Find the position after the next form boundary starting from POS.
+   Bar-quoted |...| spans and \\ escapes are opaque (a ) inside |a)|
+   must not end the scan early)."
   (when (>= pos end) (return-from find-next-form-boundary end))
-  (let ((depth 0) (in-string nil) (in-comment nil) (block-depth 0))
+  (let ((depth 0) (in-string nil) (in-comment nil) (block-depth 0) (in-bar nil))
     (loop for i from pos below end
           for ch = (char text i)
           do (cond
@@ -504,6 +591,9 @@
                 (when (char= ch #\Newline) (setf in-comment nil)))
                (in-string
                 (when (char= ch #\") (setf in-string nil))
+                (when (and (char= ch #\\) (< (1+ i) end)) (incf i)))
+               (in-bar
+                (when (char= ch #\|) (setf in-bar nil))
                 (when (and (char= ch #\\) (< (1+ i) end)) (incf i)))
                ((plusp block-depth)
                 (when (and (char= ch #\#) (< (1+ i) end) (char= (char text (1+ i)) #\|))
@@ -514,6 +604,8 @@
                 (case ch
                   (#\; (setf in-comment t))
                   (#\" (setf in-string t))
+                  (#\| (setf in-bar t))
+                  (#\\ (when (< (1+ i) end) (incf i)))
                   (#\( (incf depth))
                   (#\) (if (zerop depth) (return (1+ i)) (decf depth)))
                   (#\[ (incf depth))
@@ -522,8 +614,16 @@
                   (#\} (if (zerop depth) (return (1+ i)) (decf depth)))
                (#\# (when (and (< (1+ i) end) (char= (char text (1+ i)) #\|))
                           (incf block-depth) (incf i))
+                     ;; skip #\NAME / #\X char literals whole so a #\| never
+                     ;; looks like a bar-symbol opener below
                      (when (and (< (1+ i) end) (char= (char text (1+ i)) #\\))
-                           (incf i))))))
+                       (let ((ci (+ i 2)))
+                         (if (and (< ci end) (alphanumericp (char text ci)))
+                             (loop while (and (< ci end)
+                                              (alphanumericp (char text ci)))
+                                   do (incf ci))
+                             (when (< ci end) (incf ci)))
+                         (setf i (1- ci))))))))
           finally (return end))))
 
 (defun skip-whitespace (text pos end)

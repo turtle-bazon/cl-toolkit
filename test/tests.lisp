@@ -512,6 +512,52 @@
   (is (string= "SPACE" (node-value (first (top-forms-of "#\\Space")))))
   (is (string= "λ" (node-value (first (top-forms-of "#\\λ"))))))
 
+(defun char-value (code)
+  (node-value (first (top-forms-of code))))
+
+(defun code-rejected-p (code)
+  "T when CODE does not parse into a single clean form (an :ERROR root,
+   or an :ERROR anywhere in the tree — recovery hides inner failures)."
+  (labels ((errp (node)
+             (and (nodep node)
+                  (or (eq (node-type node) :error)
+                      (some #'errp (node-children node))))))
+    (let ((ast (parse-lisp-source code)))
+      (or (errp ast)
+          (not (getf (validate ast) :balanced))
+          (/= 0 (getf (analyze-balance code) :final-depth))
+          (plusp (length (getf (analyze-balance code) :errors)))))))
+
+(test char-literal-exotic-singles
+  ;; SBCL reads all of these; the toolkit must not narrow them away.
+  ;; Known names keep the upcased convention ("#\Space" -> "SPACE"),
+  ;; while graphic singles keep their exact case ("#\a" -> "a").
+  (is (string= "LOCK" (char-value "#\\Lock")))
+  (is (string= "LOCK" (char-value "#\\lock")))
+  (is (string= "«" (char-value "#\\«")))                   ; non-alphanumeric
+  (is (string= "→" (char-value "#\\→")))
+  (is (string= "€" (char-value "#\\€")))
+  (is (string= "\\" (char-value "#\\\\")))                 ; backslash at EOF
+  (is (string= "|" (char-value "#\\|")))
+  (is (string= (string (code-char 1))                       ; control code
+               (char-value (concatenate 'string "#\\"
+                                        (string (code-char 1))))))
+  (is (string= (string (code-char 127))
+               (char-value (concatenate 'string "#\\"
+                                        (string (code-char 127)))))))
+
+(test char-name-not-extended
+  "A char that continues a name must not degrade into char + symbol."
+  (dolist (code '("#\\Nulx" "#\\Sp!" "#\\Spac" "#\\ |" "#\\A{" "#\\AB"
+                  "#\\Space!" "#\\Nul\\" "#\\ 7" "#\\Lockx"))
+    (is (code-rejected-p code) (code=~s should be rejected~% code))))
+
+(test char-name-stoppers-accepted
+  "Whitespace, delimiters and EOF legitimately end a char name."
+  (dolist (code '("(list #\\Space)" "(list #\\Space x)" "(list #\\Space(x))"
+                  "(list #\\Space\"s\")" "(list #\\A)"))
+    (is (not (code-rejected-p code)) (code=~s should parse~% code))))
+
 (test backquote-single-form
   (let* ((ast (parse-lisp-source "`(a ,b)"))
          (forms (list-top-level ast)))

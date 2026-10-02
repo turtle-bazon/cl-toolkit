@@ -1035,12 +1035,21 @@
       (t (values i (+ col 1) nil)))))
 
 (defun balance-process-normal (ch i text depth max-depth line col errors)
-  "Process character in normal code mode. Returns updated state."
+  "Process character in normal code mode. Returns updated state.
+   Backslash escapes the next char (symbol constituent \\X, e.g. \\a):
+   it is consumed as a unit so an escaped structural char (\\)) never
+   touches depth. Bar opens a |...| symbol (handled by :bar mode)."
   (case ch
     (#\; (values i col depth max-depth errors :line-comment))
     (#\# (multiple-value-bind (ni nc in-block) (balance-process-hash i text col)
            (values ni nc depth max-depth errors (if in-block :block-comment :normal))))
     (#\" (values i (+ col 1) depth max-depth errors :string))
+    (#\| (values i (+ col 1) depth max-depth errors :bar))
+    (#\\ (if (< (1+ i) (length text))
+             (if (char= (char text (1+ i)) #\Newline)
+                 (values (1+ i) 0 depth max-depth errors :newline-escaped)
+                 (values (1+ i) (+ col 2) depth max-depth errors :normal))
+             (values i (+ col 1) depth max-depth errors :normal)))
     (#\( (let ((nd (1+ depth)))
            (values i (+ col 1) nd (max max-depth nd) errors :normal)))
     (#\) (multiple-value-bind (new-depth new-errors)
@@ -1058,6 +1067,24 @@
            (values i (+ col 1) new-depth max-depth new-errors :normal)))
     (#\Newline (values i 0 depth max-depth errors :newline))
     (t (values i (1+ col) depth max-depth errors :normal))))
+
+(defun balance-process-bar (ch i text line col)
+  "Process character inside a |...| symbol. Escapes consume two chars;
+   the closing bar ends the symbol. Returns (values ended-p new-i
+   new-line new-col)."
+  (cond
+    ((and (char= ch #\\)
+          (< (1+ i) (length text)))
+     (let ((nxt (char text (1+ i))))
+       (if (char= nxt #\Newline)
+           (values nil (1+ i) (1+ line) 0)
+           (values nil (1+ i) line (+ col 2)))))
+    ((char= ch #\Newline)
+     (values nil i (1+ line) 0))
+    ((char= ch #\|)
+     (values t i line (+ col 1)))
+    (t
+     (values nil i line (+ col 1)))))
 
 (defun balance-dispatch-line-comment (ch i text line col depth line-start-depth lines mode)
   "Dispatch line comment mode. Newline ends it (0-based)."
@@ -1103,13 +1130,27 @@
       (t
        (values ni nl nc depth line-start-depth lines mode)))))
 
+(defun balance-dispatch-bar (ch i text line col depth line-start-depth lines mode)
+  "Dispatch |...| symbol mode. Newlines inside end the visual line
+   (depth is untouched — bars are opaque to structure)."
+  (multiple-value-bind (ended ni nl nc)
+      (balance-process-bar ch i text line col)
+    (cond
+      (ended
+       (values ni nl nc depth line-start-depth lines :normal))
+      ((and (= nl (1+ line)) (= nc 0))
+       (setf lines (balance-record-line line depth line-start-depth lines))
+       (values ni nl nc depth depth lines mode))
+      (t
+       (values ni nl nc depth line-start-depth lines mode)))))
+
 (defun balance-dispatch-normal (ch i text line col depth max-depth line-start-depth lines errors mode)
   "Dispatch normal mode (no double col increment)."
   (declare (ignore mode))
   (multiple-value-bind (ni nc nd nmax nerrors nmode)
       (balance-process-normal ch i text depth max-depth line col errors)
     (cond
-      ((eq nmode :newline)
+      ((or (eq nmode :newline) (eq nmode :newline-escaped))
        (setf lines (balance-record-line line nd line-start-depth lines))
        (values ni (1+ line) 0 nd nmax nd lines nerrors :normal))
       ((eq nmode :line-comment)
@@ -1118,6 +1159,8 @@
        (values ni line nc nd nmax line-start-depth lines nerrors :block-comment))
       ((eq nmode :string)
        (values ni line nc nd nmax line-start-depth lines nerrors :string))
+      ((eq nmode :bar)
+       (values ni line nc nd nmax line-start-depth lines nerrors :bar))
       (t
        (values ni line nc nd nmax line-start-depth lines nerrors :normal)))))
 
@@ -1144,6 +1187,9 @@
                (:string
                 (multiple-value-setq (i line col depth line-start-depth lines mode)
                   (balance-dispatch-string ch i text line col depth line-start-depth lines mode)))
+               (:bar
+                (multiple-value-setq (i line col depth line-start-depth lines mode)
+                  (balance-dispatch-bar ch i text line col depth line-start-depth lines mode)))
                (:normal
                 (multiple-value-setq (i line col depth max-depth line-start-depth lines errors mode)
                   (balance-dispatch-normal ch i text line col depth max-depth line-start-depth lines errors mode))
@@ -1163,6 +1209,10 @@
     (when (eq mode :string)
       (push (list :line line :col col
                   :message "Unclosed string at end of file")
+            errors))
+    (when (eq mode :bar)
+      (push (list :line line :col col
+                  :message "Unclosed |...| symbol at end of file")
             errors))
     (list :lines (nreverse lines)
           :max-depth max-depth
@@ -1221,6 +1271,21 @@
      (incf line-pos)
      (values line-pos nil (1+ i)))
     ((char= ch #\")
+     (values line-pos t i))
+    (t (values line-pos nil i))))
+
+(defun format-process-bar (ch i text result line-pos)
+  "Process character inside a |...| symbol. Returns (values line-pos
+   ended-p new-i). Literal span like strings: backslash consumes the next
+   char, and no indentation applies inside (positions are verbatim)."
+  (write-char ch result)
+  (incf line-pos)
+  (cond
+    ((and (char= ch #\\) (< (1+ i) (length text)))
+     (write-char (char text (1+ i)) result)
+     (incf line-pos)
+     (values line-pos nil (1+ i)))
+    ((char= ch #\|)
      (values line-pos t i))
     (t (values line-pos nil i))))
 
@@ -1344,6 +1409,34 @@
     (write-char #\" result) (incf line-pos)
     (values line-pos need-indent)))
 
+(defun format-dispatch-bar (ch i text result line-pos mode)
+  "Dispatch |...| symbol mode. Returns (values line-pos mode new-i)."
+  (multiple-value-bind (lp ended ni)
+      (format-process-bar ch i text result line-pos)
+    (setf line-pos lp i ni)
+    (when ended (setf mode :normal))
+    (values line-pos mode i)))
+
+(defun format-dispatch-backslash (depth indent result line-pos need-indent i text)
+  "Dispatch backslash escape in normal code: apply indent, write \\ plus
+   the next char, skip both — an escaped delimiter (\\)) never touches
+   depth. Returns (values new-i new-line-pos new-need-indent)."
+  (multiple-value-bind (lp ni) (format-apply-indent depth indent result line-pos need-indent)
+    (setf line-pos lp need-indent ni)
+    (write-char #\\ result) (incf line-pos)
+    (if (< (1+ i) (length text))
+        (progn (write-char (char text (1+ i)) result) (incf line-pos)
+               (values (1+ i) line-pos need-indent))
+        (values i line-pos need-indent))))
+
+(defun format-dispatch-pipe (depth indent result line-pos need-indent)
+  "Dispatch | in normal code: apply indent, write |, enter bar mode.
+   Returns (values new-line-pos new-need-indent)."
+  (multiple-value-bind (lp ni) (format-apply-indent depth indent result line-pos need-indent)
+    (setf line-pos lp need-indent ni)
+    (write-char #\| result) (incf line-pos)
+    (values line-pos need-indent)))
+
 (defun format-dispatch-normal (ch i text depth indent result line-pos need-indent mode)
   "Dispatch normal mode character. Returns (values i line-pos need-indent mode depth)."
   (case ch
@@ -1367,6 +1460,15 @@
      (multiple-value-setq (line-pos need-indent)
        (format-dispatch-quote depth indent result line-pos need-indent))
      (setf mode :string)
+     (values i line-pos need-indent mode depth))
+    (#\|
+     (multiple-value-setq (line-pos need-indent)
+       (format-dispatch-pipe depth indent result line-pos need-indent))
+     (setf mode :bar)
+     (values i line-pos need-indent mode depth))
+    (#\\
+     (multiple-value-setq (i line-pos need-indent)
+       (format-dispatch-backslash depth indent result line-pos need-indent i text))
      (values i line-pos need-indent mode depth))
     ((#\[ #\{ #\()
      (multiple-value-bind (lp ni d)
@@ -1404,6 +1506,9 @@
                (:string
                 (multiple-value-setq (line-pos mode i)
                   (format-dispatch-string ch i text result line-pos mode)))
+               (:bar
+                (multiple-value-setq (line-pos mode i)
+                  (format-dispatch-bar ch i text result line-pos mode)))
                 (:normal
                  (multiple-value-setq (i line-pos need-indent mode depth)
                    (format-dispatch-normal ch i text depth indent result line-pos need-indent mode)))))
