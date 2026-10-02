@@ -77,8 +77,13 @@
 (defrule ws-unit
     (or whitespace comment))
 
+;;; CLHS 2.1.1 whitespace is Space, Tab, Newline, Return and Page —
+;;; #\Return matters in practice: without it every CRLF file (Windows
+;;; checkouts, old CVS archives) failed to parse with a bogus syntax
+;;; error. Note #\Vt (code 11) is NOT whitespace: the reader returns it
+;;; as an ordinary character, i.e. "#\Vt".
 (defrule whitespace
-    (+ (or #\Space #\Tab #\Newline #\Page))
+    (+ (or #\Space #\Tab #\Newline #\Return #\Page))
   (:constant nil))
 
 (defrule ws
@@ -92,20 +97,49 @@
 ;;; --- Atom rules ---
 
 ;;; String
-(defrule string-escape
-    (and #\\ character)
-  (:lambda (pair)
-    (string (second pair))))
+;;; esrap builds one production per repetition element and walks that
+;;; list recursively, so a body rule written as (* char) died on the
+;;; control stack for any long literal — real files embedding a big
+;;; JSON string (a single "~100KB string literal) killed the whole
+;;; process, uncatchably. Both bodies are therefore matched in ONE
+;;; production by an iterative scanner.
 
-(defrule string-char
-    (or string-escape (not-doublequote character))
-  (:lambda (ch)
-    (if (stringp ch) ch (string ch))))
+(defun scan-string-body (text position end)
+  "esrap terminal: the body of a string literal, up to the closing
+   quote. Returns (values body-string position-after-body nil) on
+   success, or (values nil position reason) when unterminated."
+  (let ((i position)
+        (buf (make-array 0 :element-type 'character
+                         :adjustable t :fill-pointer 0)))
+    (loop while (< i end) do
+      (let ((ch (char text i)))
+        (cond
+          ((char= ch #\")
+           (return))
+          ((char= ch #\\)
+           (if (< (1+ i) end)
+               (progn
+                 (vector-push-extend (char text (1+ i)) buf)
+                 (incf i 2))
+               (progn
+                 (vector-push-extend ch buf)
+                 (incf i))))
+          (t
+           (vector-push-extend ch buf)
+           (incf i)))))
+    ;; stop AT the closing quote: string-literal has its own rule for it
+    (if (and (< i end) (char= (char text i) #\"))
+        (if (= i position)
+            ;; An EMPTY body consumes nothing, and esrap treats a
+            ;; zero-width non-positive match as failure. Third value T
+            ;; means "success even without progress" in its terminal
+            ;; protocol; the closing quote rule still moves us on.
+            (values "" position t)
+            (values (coerce buf 'string) i nil))
+        (values nil position "Unterminated string literal"))))
 
 (defrule string-body
-    (* string-char)
-  (:lambda (chars)
-    (apply #'concatenate 'string chars)))
+  (function scan-string-body))
 
 (defrule string-literal
     (and #\" string-body #\")
@@ -168,51 +202,48 @@
                  :value (if (and sign (string= sign "-")) (- val) val)
                  :start start :end end))))
 
-;;; Character literal names. SBCL-verified set: 15 full names plus the
-;;; traditional short forms Bel Esc Del Alt Sp Cr Lf Bs Ht (Maclisp
-;;; heritage — "Sp ace" reads as Space!). Clear/Meta/Control/Hyper/
-;;; Super/Shift, Lock's non-existent shorts (Lk/Lck) and any other
-;;; multi-alpha token (#\AB) are NOT names.
-;;; Spelled with per-letter case pairs (esrap strings are
-;;; case-sensitive); longest match first within each family (Null
-;;; before Nul, Bell before Bel, ...). Value keeps upcased convention.
+;;; Character literal names. Rather than spelling out every mnemonic as
+;;; grammar (the hand-written version needed 20 lines for the ASCII
+;;; controls alone and still missed SBCL's 2-3 letter abbreviations), the
+;;; accepted names live in a table and one esrap terminal looks them up.
+;;; The set is what SBCL actually accepts for #\Nul / #\Soh / #\Ack /
+;;; #\Dle / #\Nak / #\Vt ... plus the traditional short forms
+;;; (Bel Esc Del Alt Sp Cr Lf Bs Ht) and the Maclisp-era extras
+;;; (Delete, Altmode, Linefeed, Lock). Hyphenated names are NOT
+;;; accepted — SBCL rejects those outright.
+(defparameter *char-name-table*
+  (let ((table (make-hash-table :test #'equal)))
+    (dolist (name '("NUL" "NULL" "SOH" "STX" "ETX" "EOT" "ENQ" "ACK"
+                    "BEL" "BELL" "BACKSPACE" "BS" "TAB" "HT" "NEWLINE"
+                    "NL" "LINEFEED" "LF" "VT" "PAGE" "RETURN" "CR" "SO"
+                    "SI" "DLE" "DC1" "DC2" "DC3" "DC4" "NAK" "SYN" "ETB"
+                    "CAN" "EM" "SUB" "ESC" "ESCAPE" "FS" "GS" "RS" "US"
+                    "SPACE" "SP" "RUBOUT" "DELETE" "DEL" "ALT" "ALTMODE"
+                    "LOCK"))
+      (setf (gethash name table) name))
+    table))
+
+(defun scan-char-name (text position end)
+  "esrap terminal: one of SBCL's character-name mnemonics, matched
+   case-insensitively. Returns (values upcased-name position-after nil),
+   or (values nil position nil) when the run of letters is not a name."
+  (let ((i position))
+    ;; letters, then letters/digits: SBCL's control mnemonics include
+    ;; "Dc4", so a name is not purely alphabetic
+    (when (and (< i end) (alpha-char-p (char text i)))
+      (loop while (and (< i end)
+                       (or (alpha-char-p (char text i))
+                           (digit-char-p (char text i))))
+            do (incf i)))
+    (if (= i position)
+        (values nil position nil)
+        (let ((name (string-upcase (subseq text position i))))
+          (if (gethash name *char-name-table*)
+              (values name i nil)
+              (values nil position nil))))))
+
 (defrule char-known-name
-    (or (and (or #\N #\n) (or #\U #\u) (or #\L #\l) (or #\L #\l))
-        (and (or #\N #\n) (or #\U #\u) (or #\L #\l))
-        (and (or #\B #\b) (or #\E #\e) (or #\L #\l) (or #\L #\l))
-        (and (or #\B #\b) (or #\E #\e) (or #\L #\l))
-        (and (or #\B #\b) (or #\A #\a) (or #\C #\c) (or #\K #\k)
-             (or #\S #\s) (or #\P #\p) (or #\A #\a) (or #\C #\c)
-             (or #\E #\e))
-        (and (or #\B #\b) (or #\S #\s))
-        (and (or #\T #\t) (or #\A #\a) (or #\B #\b))
-        (and (or #\N #\n) (or #\E #\e) (or #\W #\w) (or #\L #\l)
-             (or #\I #\i) (or #\N #\n) (or #\E #\e))
-        (and (or #\L #\l) (or #\I #\i) (or #\N #\n) (or #\E #\e)
-             (or #\F #\f) (or #\E #\e) (or #\E #\e) (or #\D #\d))
-        (and (or #\L #\l) (or #\F #\f))
-        (and (or #\P #\p) (or #\A #\a) (or #\G #\g) (or #\E #\e))
-        (and (or #\R #\r) (or #\E #\e) (or #\T #\t) (or #\U #\u)
-             (or #\R #\r) (or #\N #\n))
-        (and (or #\C #\c) (or #\R #\r))
-        (and (or #\E #\e) (or #\S #\s) (or #\C #\c) (or #\A #\a)
-             (or #\P #\p) (or #\E #\e))
-        (and (or #\E #\e) (or #\S #\s) (or #\C #\c))
-        (and (or #\S #\s) (or #\P #\p) (or #\A #\a) (or #\C #\c)
-             (or #\E #\e))
-        (and (or #\S #\s) (or #\P #\p))
-        (and (or #\R #\r) (or #\U #\u) (or #\B #\b) (or #\O #\o)
-             (or #\U #\u) (or #\T #\t))
-        (and (or #\D #\d) (or #\E #\e) (or #\L #\l) (or #\E #\e)
-             (or #\T #\t) (or #\E #\e))
-        (and (or #\D #\d) (or #\E #\e) (or #\L #\l))
-        (and (or #\A #\a) (or #\L #\l) (or #\T #\t) (or #\M #\m)
-             (or #\O #\o) (or #\D #\d) (or #\E #\e))
-        (and (or #\A #\a) (or #\L #\l) (or #\T #\t))
-        (and (or #\L #\l) (or #\O #\o) (or #\C #\c) (or #\K #\k))
-        (and (or #\H #\h) (or #\T #\t)))
-  (:lambda (chars)
-    (string-upcase (esrap:text chars))))
+  (function scan-char-name))
 
 ;;; What can EXTEND a character name past its first char (SBCL-probed
 ;;; over every printable ASCII follower). Only whitespace, the
@@ -256,8 +287,58 @@
   (:lambda (parts)
     (first parts)))
 
+;;; Unicode character names as SBCL spells them, e.g.
+;;; #\LATIN_SMALL_LETTER_E_WITH_ACUTE — underscore-separated words.
+;;; SBCL validates these against its Unicode table and rejects made-up
+;;; ones (#\Foo_Bar); this rule cannot, and is deliberately more
+;;; permissive: reading a valid literal wrongly is the worse failure for
+;;; an editor than accepting a name nobody writes. Hyphens are NOT part
+;;; of the pattern — SBCL rejects those outright.
+(defrule name-letter-or-digit
+    (or alpha digit))
+
+(defrule name-word
+    (+ name-letter-or-digit))
+
+(defrule name-word-pair
+    (and #\_ name-word))
+
+(defrule char-unicode-name
+    ;; two or more words joined by single underscores. Written as
+    ;; word (word)* rather than one greedy run: a repetition never
+    ;; gives characters back, so "(+ (or alpha digit #\_))" would
+    ;; swallow the underscores and leave nothing for the rest.
+    (and name-word (+ name-word-pair))
+  (:lambda (parts)
+    (string-upcase (esrap:text parts))))
+
+(defrule char-unicode-stopped
+    (and char-unicode-name (! char-name-continue))
+  (:lambda (parts)
+    (first parts)))
+
+;;; SBCL also reads a character by code point: #\U+DF, #\u+DF, #\uDF.
+;;; Not standard CL, but it appears in real code (SBCL's own encoding
+;;; tests, anything generated from Unicode data).
+(defrule hex-digit
+    (or digit (character-ranges (#\a #\f) (#\A #\F))))
+
+(defrule char-code-point
+    (and (or #\u #\U) (? #\+) (+ hex-digit))
+  (:lambda (parts)
+    (destructuring-bind (prefix plus digits) parts
+      (declare (ignore prefix plus))
+      ;; digits arrive as one production per hex digit
+      (code-char (parse-integer (esrap:text digits) :radix 16)))))
+
+(defrule char-code-point-stopped
+    (and char-code-point (! char-name-continue))
+  (:lambda (parts)
+    (first parts)))
+
 (defrule char-literal
-    (and "#\\" (or char-known-stopped char-ws-name char-graphic))
+    (and "#\\" (or char-known-stopped char-unicode-stopped
+                   char-code-point-stopped char-ws-name char-graphic))
   (:lambda (parts &bounds start end)
     ;; Known names arrive upcased from their rule; singles keep exact
     ;; case (#\a stays "a").
@@ -283,8 +364,23 @@
 (defrule sign-char
     (or #\+ #\-))
 
+;;; The reader treats ANY non-ASCII character as a symbol constituent,
+;;; not just the alphanumeric ones: "§derpy", "«x«" and "→y" are single
+;;; symbols in SBCL. ASCII is spelled out below because that is what the
+;;; standard defines; everything above code point 127 comes from here.
+(defun scan-unicode-constituent (text position end)
+  "esrap terminal: one non-ASCII character, a symbol constituent."
+  (if (and (< position end)
+           (> (char-code (char text position)) 127))
+      (values (string (char text position)) (1+ position) nil)
+      (values nil position nil)))
+
+(defrule unicode-constituent
+  (function scan-unicode-constituent))
+
 (defrule symbol-head-char
-    (or alpha digit #\. #\- #\* #\+ #\! #\? #\_ #\= #\< #\> #\& #\/ #\~ #\@ #\$ #\% #\^ #\: #\# #\| #\` #\,))
+    (or alpha digit unicode-constituent
+        #\. #\- #\* #\+ #\! #\? #\_ #\= #\< #\> #\& #\/ #\~ #\@ #\$ #\% #\^ #\: #\# #\| #\` #\,))
 
 ;;; Symbol constituent escapes: \X is literal X, |...| quotes an
 ;;; arbitrary span (spaces and parens included). Found in the wild as
@@ -300,9 +396,25 @@
   (:lambda (x)
     (if (stringp x) x (string (second x)))))
 
+(defun scan-bar-body (text position end)
+  "esrap terminal: the inside of a |...| symbol, stopping at the first
+   unescaped bar so the whole span costs one production."
+  (let ((i position))
+    (loop while (< i end) do
+      (let ((ch (char text i)))
+        (cond
+          ((char= ch #\|) (return))
+          ((char= ch #\\) (incf i 2))
+          (t (incf i)))))
+    ;; stop AT the closing bar; bar-segment has its own rule for it
+    (if (and (< i end) (char= (char text i) #\|))
+        (values (subseq text position i) i nil)
+        (values nil position "Unterminated |...| symbol"))))
+
 (defrule bar-segment
-    (and #\| (* bar-inner-char) #\|)
+    (and #\| (function scan-bar-body) #\|)
   (:lambda (parts)
+    ;; esrap:text keeps the surrounding bars, which are part of the name
     (esrap:text parts)))
 
 (defrule symbol-tail-char
@@ -316,11 +428,20 @@
   (:lambda (chars)
     (esrap:text chars)))
 
+(defrule reader-conditional-prefix
+    ;; "#+" / "#-" introduce a feature conditional, never a symbol.
+    ;; Without this guard "#+sbcl" parsed as one symbol and the following
+    ;; form became a second top-level form.
+    (or "#+" "#-"))
+
 (defrule symbol
     ;; A "#\" prefix always means char-literal-or-bust: without this
     ;; guard an invalid "#\AB" would degrade into a "#" symbol plus
     ;; trailing forms instead of failing the enclosing form.
-    (and (! "#\\") symbol-head (* symbol-tail-char))
+    (and (! "#\\")
+         (! reader-conditional-prefix)
+         symbol-head
+         (* symbol-tail-char))
   (:lambda (chars &bounds start end)
     (let ((full (esrap:text chars)))
       ;; Split on the LAST colon so "foo::bar" yields package "foo",
@@ -539,38 +660,176 @@
         (format nil "Syntax error at ~a" (subseq loc 1 (1- (length loc))))
         (first-line report))))
 
+;;; Deep nesting and long files used to be fatal. esrap's PEG engine
+;;; recurses per bracket level and accumulates state per repetition, so
+;;; ~1500 nested parens overflowed the control stack and ~20000
+;;; top-level forms exhausted the heap. Neither is catchable: SBCL dies
+;;; on the guard page. So the depth is measured up front by an iterative
+;;; scan (no recursion), pathological input is refused with an ordinary
+;;; :ERROR node, and the forms themselves are parsed one at a time so
+;;; per-repetition state never accumulates across a whole file.
+
+(defparameter *max-parse-depth*
+  800
+  "Maximum bracket nesting `parse-lisp-source' will attempt.
+   esrap descends recursively per bracket level, so deep nesting can
+   run off the end of the control stack — and a stack overflow is not
+   catchable, it just kills the process (measured cliff: fine at 1000
+   levels, guard-page fault at 1200). 800 keeps a comfortable margin
+   while accepting anything realistic; deeper input gets a clear
+   :ERROR node instead of a segfault.")
+
+(defun whitespace-char-p (ch)
+  "True for the whitespace characters of CLHS 2.1.1."
+  (or (char= ch #\Space) (char= ch #\Tab) (char= ch #\Newline)
+      (char= ch #\Return) (char= ch #\Page)))
+
+(defun scan-source (text start end)
+  "Single iterative pass over TEXT between START and END.
+   Returns (values max-depth cut-points).
+   MAX-DEPTH is the deepest bracket nesting. CUT-POINTS are ascending
+   offsets at which the text may be cut without splitting a form: any
+   whitespace that sits outside every bracket, string, comment and
+   |...| symbol. The pass is iterative, so it costs no stack.
+   Strings, line comments, nested block comments, |...| symbols and
+   backslash escapes are all treated as opaque."
+  (let ((i start)
+        (depth 0)
+        (max-depth 0)
+        (block-stack nil)      ; block-comment depth outside each bracket
+        (block-depth 0)
+        (mode :normal)
+        (cuts '()))
+    (labels ((at-clean-state-p ()
+               (and (zerop depth)
+                    (zerop block-depth)
+                    (eq mode :normal))))
+      (loop while (< i end) do
+        (let ((ch (char text i))
+              (nxt (and (< (1+ i) end) (char text (1+ i)))))
+          (if (and (at-clean-state-p) (whitespace-char-p ch))
+              (push i cuts))
+          (cond
+            ((eq mode :line-comment)
+             (when (char= ch #\Newline) (setf mode :normal)))
+            ((eq mode :string)
+             (cond ((char= ch #\\) (when (< (1+ i) end) (incf i)))
+                   ((char= ch #\") (setf mode :normal))))
+            ((eq mode :bar)
+             (cond ((char= ch #\\) (when (< (1+ i) end) (incf i)))
+                   ((char= ch #\|) (setf mode :normal))))
+            ((plusp block-depth)
+             ;; Inside #| ... |# EVERYTHING is literal text: quotes,
+             ;; semicolons, bars and brackets are not structure. Only a
+             ;; nested block comment matters.
+             (cond ((and nxt (char= ch #\#) (char= nxt #\|))
+                    (incf block-depth)
+                    (incf i))
+                   ((and nxt (char= ch #\|) (char= nxt #\#))
+                    (decf block-depth)
+                    (incf i))))
+            ((char= ch #\;) (setf mode :line-comment))
+            ((char= ch #\") (setf mode :string))
+            ;; a backslash escapes the next character: \( and \" are
+            ;; literals, not structure
+            ((char= ch #\\) (when (< (1+ i) end) (incf i)))
+            ((and nxt (char= ch #\#) (char= nxt #\|))
+             (incf block-depth)
+             (incf i))
+            ;; "|#" must be tested before a bare "|", or the bar looks
+            ;; like the start of a |...| symbol
+            ;; a bare "|" outside a block comment starts a |...| symbol;
+            ;; the "|#" terminator was already handled in the block-depth
+            ;; case above, so it must not be tested again here
+            ((char= ch #\|) (setf mode :bar))
+            ((or (char= ch #\( ) (char= ch #\[) (char= ch #\{))
+             (push block-depth block-stack)
+             (incf depth)
+             (when (> depth max-depth) (setf max-depth depth)))
+            ((or (char= ch #\) ) (char= ch #\]) (char= ch #\}))
+             (when (plusp depth)
+               (decf depth)
+               (pop block-stack)))))
+        (incf i))
+      (values max-depth (nreverse cuts)))))
+
+(defun too-deep-error-node (start end depth)
+  (make-node :error
+             :value (format nil
+                            "Nesting too deep: ~d levels exceeds the ~d level parse limit"
+                            depth *max-parse-depth*)
+             :start start
+             :end end))
+
+(defun parse-chunk (text lo hi)
+  "Parse TEXT[LO,HI) as one strict `source-file' match.
+   Returns (values nodes error-node).  Error-node is NIL on success and
+   then NODES holds the forms; esrap only succeeds when the rule
+   consumes the WHOLE range, so success proves [LO,HI) holds nothing
+   but complete forms."
+  (handler-case
+      (let ((ast (esrap:parse 'source-file text :start lo :end hi)))
+        (values (cl-toolkit-ast:node-children ast) nil))
+    (esrap:esrap-parse-error (c)
+      (values nil
+              (make-node :error
+                         :value (compact-parse-error c)
+                         :start lo
+                         :end hi)))))
+
+(defun parse-forms-from (text lo text-end cuts)
+  "Collect the forms of TEXT from LO to TEXT-END.
+   CUTS are ascending candidate end offsets from `scan-source'.  Each
+   candidate is accepted only when esrap parses the whole range as
+   complete forms; when one does not, POS stays put and the next
+   candidate extends the range, because whitespace alone does not
+   prove a form boundary (the space in \"#+sbcl (a)\" precedes the
+   macro's argument).  Whatever is left after the last candidate is
+   parsed as one final range.
+   Returns (values forms error-node)."
+  (let ((forms '())
+        (error-node nil)
+        (pos lo))
+    (dolist (cand cuts)
+      (unless (or error-node (<= cand pos))
+        (multiple-value-bind (nodes err) (parse-chunk text pos cand)
+          (when (null err)
+            (dolist (node nodes) (push node forms))
+            (setf pos cand)))))
+    (unless (or error-node (>= pos text-end))
+      (multiple-value-bind (nodes err) (parse-chunk text pos text-end)
+        (if (null err)
+            (progn
+              (dolist (node nodes) (push node forms))
+              (setf pos text-end))
+            (setf error-node err))))
+    (values (nreverse forms) error-node)))
+
 (defun parse-lisp-source (text &optional (start 0) end)
   "Parse TEXT as Lisp source code. Returns AST root node.
-   START and END are optional bounds into TEXT."
+   START and END are optional bounds into TEXT.
+   A single `source-file' match over a whole file accumulates esrap
+   state per top-level form, which exhausted the heap on large inputs
+   and overflowed the control stack on deep ones (neither is catchable).
+   So the text is scanned once, iteratively: too-deep nesting is
+   refused up front, and the rest is handed to esrap in chunks whose
+   ends esrap itself proves to be form boundaries. A syntax error
+   anywhere still yields an :ERROR root, as before; use
+   `parse-with-recovery' to keep the good forms."
   (let ((text-end (or end (length text)))
         (*standard-output* (make-broadcast-stream))
         (*error-output* (make-broadcast-stream)))
-    (handler-case
-        (let ((ast (esrap:parse 'source-file text
-                                :start start
-                                :end text-end)))
-          ;; Check if parse consumed all input
-          (let ((consumed-end (or (getf ast :end) start)))
-            (if (< consumed-end text-end)
-                ;; Unconsumed input = incomplete or invalid form
-                (let ((remaining (subseq text consumed-end text-end))
-                      (remaining-start consumed-end))
-                  ;; Check if remaining is just whitespace/comments
-                  (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) remaining)))
-                    (if (> (length trimmed) 0)
-                        ;; Real unconsumed content = error
-                        (make-node :error
-                                   :value (format nil "Incomplete or invalid form: ~s" trimmed)
-                                   :start remaining-start
-                                   :end text-end)
-                        ;; Just whitespace/comments = ok, but note trailing content
-                        ast)))
-                ast)))
-      (esrap:esrap-parse-error (c)
-        (make-node :error
-                   :value (compact-parse-error c)
-                   :start 0
-                   :end text-end)))))
+    (multiple-value-bind (depth cuts) (scan-source text start text-end)
+      (if (> depth *max-parse-depth*)
+          (too-deep-error-node start text-end depth)
+          (multiple-value-bind (forms error-node)
+              (parse-forms-from text start text-end cuts)
+            (or error-node
+                (make-node :list
+                           :children forms
+                           :source "source-file"
+                           :start start
+                           :end text-end)))))))
 
 ;;; ============================================================
 ;;; Error Recovery Parser

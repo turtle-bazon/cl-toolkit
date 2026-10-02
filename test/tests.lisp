@@ -620,6 +620,198 @@
   (is (= 0 (getf (analyze-balance "#2A((1 2))") :final-depth)))
   (is (= 0 (getf (analyze-balance "(a #+sbcl b)") :final-depth))))
 
+;;; --- CRLF / CR line endings -------------------------------------
+;;; Regression: #\Return was missing from the whitespace rule, so every
+;;; CRLF file (Windows checkouts, old CVS archives) failed with a bogus
+;;; "Syntax error". Found by sweeping every Lisp file on the machine.
+
+(defvar *cr* (code-char 13))
+(defvar *lf* (code-char 10))
+
+(defun crlf (s)
+  "S — a FORMAT string — with every newline replaced by CRLF."
+  (let ((expanded (format nil s)))
+    (with-output-to-string (out)
+      (loop for ch across expanded
+            do (if (char= ch *lf*)
+                   (progn (write-char *cr* out) (write-char *lf* out))
+                   (write-char ch out))))))
+
+(test crlf-files-parse
+  (dolist (code (list "(a) (b)"
+                      "(defun f (x)~%  (+ x 1))"
+                      ";; comment~%(a)"
+                      "#| block |# (a)"
+                      "(list #\\a #\\Space \"s\")"))
+    (let ((text (crlf code)))
+      (is (not (code-rejected-p text)) (code=~s should parse as CRLF~% code))
+      (is (= (length (top-forms-of (format nil code)))
+             (length (top-forms-of text)))
+          "CRLF must yield the same forms as LF"))))
+
+(test cr-only-line-endings
+  (let ((text (substitute *cr* *lf* (crlf "(a)~%(b)"))))
+    (is (= 2 (length (top-forms-of text)))))
+  (is (= 0 (length (top-forms-of (string *cr*))))
+      "a file holding only a CR holds no forms"))
+
+(test crlf-line-and-column
+  ;; "(a)\r\n(bb)\r\n": the second line starts at offset 5, so its
+  ;; first 'b' is line 1 column 1 — CRLF must count as ONE break.
+  (let* ((text (crlf "(a)~%(bb)~%"))
+         (offset (position #\b text)))
+    (multiple-value-bind (line col) (offset-to-line-col text offset)
+      (is (= 1 line) "second line, CRLF counted once")
+      (is (= 1 col) "first column of the second line")
+      (is (= offset (offset-to-line-col-inverse text line col)))))
+  ;; a CR-only file counts lines too
+  (let* ((text (substitute *cr* *lf* (format nil "(a)~%b")))
+         (offset (position #\b text)))
+    (multiple-value-bind (line col) (offset-to-line-col text offset)
+      (is (= 1 line) "CR ends a line too")
+      (is (= 0 col) "column resets after CR"))))
+
+;;; --- Deep nesting and huge inputs -------------------------------
+;;; Regression: esrap recurses per bracket level and builds one
+;;; production per repetition element, so both very deep nesting and
+;;; very long literals killed the process on the control stack. Neither
+;;; is catchable, so the parser now refuses deep input with a clean
+;;; :ERROR node and matches long bodies in one production.
+
+(test deep-nesting-refused-not-crashed
+  (let ((deep (concatenate 'string
+                           (make-string 1500 :initial-element #\()
+                           (make-string 1500 :initial-element #\))))
+        (ast (parse-lisp-source
+              (concatenate 'string
+                           (make-string 1500 :initial-element #\()
+                           (make-string 1500 :initial-element #\))))))
+    (declare (ignore deep))
+    (is (eq :error (node-type ast)))
+    (is (search "Nesting too deep" (node-value ast))))
+  ;; under the limit it still parses
+  (is (eq :list (node-type
+                (parse-lisp-source
+                 (concatenate 'string
+                              (make-string 100 :initial-element #\()
+                              (make-string 100 :initial-element #\))))))))
+
+(test long-string-literal-is-one-production
+  ;; A ~80KB string full of escapes used to segfault the parser.
+  (let* ((body (make-string 40000 :initial-element #\x))
+         (text (format nil "(defparameter *d* \"~a\")"
+                       (map 'string (lambda (i c)
+                                      (if (evenp i) c #\"))
+                                    (loop for i from 0
+                                          for c across body)))))
+    (is (= 1 (length (top-forms-of text))))))
+
+(test many-top-level-forms
+  (let ((text (with-output-to-string (out)
+                (dotimes (i 5000)
+                  (write-string "(defun f" out)
+                  (write-string (princ-to-string i) out)
+                  (write-string " () 1)" out)
+                  (write-char #\Newline out)))))
+    (is (= 5000 (length (top-forms-of text))))))
+
+(test reader-conditional-is-not-a-symbol
+  ;; "#+sbcl" used to parse as a symbol named #+sbcl, splitting the
+  ;; conditional from its forms.
+  (is (= 1 (length (top-forms-of "#+sbcl (a)"))))
+  (is (= 1 (length (top-forms-of "#-sbcl (a)"))))
+  (is (code-rejected-p "#+sbcl")
+      "a conditional with no form is not a symbol either")
+  (is (eq :symbol (node-type (first (top-forms-of "#:foo"))))
+      "#:foo is still a keyword, not a conditional"))
+
+;;; --- Commas outside backquote ------------------------------------
+;;; SBCL rejects these, so the balance scan now does too. A backquote
+;;; has no closing delimiter: its extent is the rest of the enclosing
+;;; form, which the scanner models with an inherited per-bracket flag.
+
+(defun comma-error-count (code)
+  (length (getf (analyze-balance code) :errors)))
+
+;;; --- Character names and literals, SBCL-exact -------------------
+;;; Found by sweeping every Lisp file on the machine: real code uses
+;;; 2-3 letter control mnemonics (#\Dle, #\Nak, #\Ack), SBCL's
+;;; code-point escapes (#\U+DF), underscore Unicode names, and #\Vt.
+
+(test char-mnemonic-names
+  (dolist (name '("Nul" "Null" "Soh" "Stx" "Etx" "Eot" "Enq" "Ack" "Bel"
+                  "Bell" "Backspace" "Bs" "Tab" "Ht" "Newline" "Nl"
+                  "Linefeed" "Lf" "Vt" "Page" "Return" "Cr" "So" "Si"
+                  "Dle" "Dc1" "Dc2" "Dc3" "Dc4" "Nak" "Syn" "Etb" "Can"
+                  "Em" "Sub" "Esc" "Escape" "Fs" "Gs" "Rs" "Us" "Space"
+                  "Sp" "Rubout" "Delete" "Del" "Alt" "Altmode" "Lock"))
+    (let ((code (concatenate 'string "#\\" name)))
+      (is (not (code-rejected-p code)) (code=~s should be a name~% code))))
+  ;; case-insensitive, and a longer name must not be truncated
+  (is (string= "NULL" (char-value "#\\null")))
+  (is (string= "NULL" (char-value "#\\NULL")))
+  (is (code-rejected-p "#\\Nulx"))
+  (is (code-rejected-p "#\\Space!"))
+  ;; hyphens are NOT part of SBCL's names
+  (is (code-rejected-p "#\\Latin-Small-Letter-E-With-Acute"))
+  (is (code-rejected-p "#\\Foo-Bar")))
+
+(test char-code-point-escapes
+  (is (string= "ß" (char-value "#\\U+DF")))
+  (is (string= "ß" (char-value "#\\u+DF")))
+  (is (string= "ß" (char-value "#\\uDF")))
+  (is (string= "1" (char-value "#\\u0031")))
+  (is (string= "A" (char-value "#\\u0041")))
+  (is (string= "😀" (char-value "#\\U+1F600")))
+  (is (code-rejected-p "#\\x41"))
+  ;; "#\u" alone is just the character u
+  (is (string= "u" (char-value "#\\u"))))
+
+(test char-unicode-underscore-names
+  (is (not (code-rejected-p "#\\LATIN_SMALL_LETTER_E_WITH_ACUTE")))
+  (is (not (code-rejected-p "#\\NO_BREAK_SPACE"))))
+
+(test unicode-symbol-constituents
+  ;; the reader makes ANY non-ASCII character a symbol constituent
+  (let ((section (string (code-char 167)))
+        (laquo (string (code-char 171))))
+    (is (= 1 (length (top-forms-of (concatenate 'string section "derpy")))))
+    (is (= 1 (length (top-forms-of (concatenate 'string laquo "x" laquo)))))
+    (is (= 1 (length (top-forms-of "λfoo"))))))
+
+(test empty-and-long-literals
+  ;; an empty string body consumes nothing, which esrap rejects unless
+  ;; the terminal explicitly reports success-without-progress
+  (dolist (code (list "\"\"" "\"\" \"\"" "(a \"\")" "\"\"\"\""))
+    (is (not (code-rejected-p code)) (code=~s should parse~% code)))
+  (is (string= "" (char-value "\"\""))))
+
+(test block-comment-is-opaque
+  ;; quotes, semicolons, bars and brackets inside #| ... |# are text
+  (dolist (code (list "#| \" | (a) ; |# (b)"
+                      "#| , |# (b)"
+                      "#| #| , |# , |# (b)"
+                      "#| (unbalanced |# (b)"))
+    (is (not (code-rejected-p code)) (code=~s should parse~% code)))
+  ;; deleting a quote inside a block comment changes nothing
+  (is (= 1 (length (top-forms-of (format nil "#| \" |# (a)"))))))
+
+(test comma-outside-backquote-is-an-error
+  (dolist (code (list "(a ,b)" "(a ,@b)" "(a . ,b)" ",x" ",@x"
+                      "(list #,x)" "'(a ,b)" "(a `(b)) ,c"))
+    (is (plusp (comma-error-count code)) (code=~s should be flagged~% code))))
+
+(test comma-inside-backquote-is-fine
+  (dolist (code (list "`x" "`(a ,b)" "`(a ,@b)" "(a `(b ,c))"
+                      "(a `(b `(c ,d)))" "(let ((x 1)) `,x)"))
+    (is (zerop (comma-error-count code)) (code=~s should be clean~% code)))
+  (is (zerop (comma-error-count "(a \"str,with,commas\")"))
+      "commas inside strings are not commas")
+  (is (zerop (comma-error-count "(a |,c|)"))
+      "commas inside bar symbols are not commas")
+  (is (zerop (comma-error-count (format nil "(a) ; ,c~%")))
+      "commas inside comments are not commas"))
+
 (test balance-unclosed-extras
   (is (plusp (length (getf (analyze-balance "(a \"open") :errors))))
   (is (plusp (length (getf (analyze-balance "#| never closed") :errors))))

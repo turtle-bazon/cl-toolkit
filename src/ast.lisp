@@ -82,13 +82,28 @@
 
 ;;; Position helpers
 
+(defun line-break-at (text i limit)
+  "Length in characters of the line break starting at I, or NIL.
+   CR, LF and CRLF each count as ONE break so CRLF files and
+   classic-Mac CR-only files map to the same line/column as LF files."
+  (let ((ch (char text i)))
+    (cond
+      ((char= ch #\Newline) 1)
+      ((char= ch #\Return)
+       (if (and (< (1+ i) limit) (char= (char text (1+ i)) #\Newline))
+           2
+           1))
+      (t nil))))
+
 (defun offset-to-line-col (text offset)
   "Convert a 0-indexed byte offset to (values line col) 0-indexed."
-  (let ((line 0) (col 0))
-    (loop for i from 0 below (min offset (length text))
-          do (if (char= (char text i) #\Newline)
-                 (progn (incf line) (setf col 0))
-                 (incf col)))
+  (let ((line 0) (col 0) (i 0))
+    (let ((limit (min offset (length text))))
+      (loop while (< i limit)
+            do (let ((n (line-break-at text i limit)))
+                 (if n
+                     (progn (incf line) (setf col 0) (incf i n))
+                     (progn (incf col) (incf i))))))
     (values line col)))
 
 (defun offset-to-line-col-inverse (text line col)
@@ -97,15 +112,17 @@
    (one past the last character) is valid for end-of-line appends."
   (when (or (< line 0) (< col 0))
     (error "Invalid position: line ~a, col ~a (must be >= 0)" line col))
-  (let ((offset 0) (current-line 0) (current-col 0))
-    (loop while (< offset (length text))
+  (let ((offset 0) (current-line 0) (current-col 0)
+        (len (length text)))
+    (loop while (< offset len)
           do (when (and (= current-line line)
                         (= current-col col))
                (return-from offset-to-line-col-inverse offset))
-              (if (char= (char text offset) #\Newline)
-                  (progn (incf current-line) (setf current-col 0))
-                  (incf current-col))
-              (incf offset))
+             (let ((n (line-break-at text offset len)))
+               (if n
+                   (progn (incf current-line) (setf current-col 0)
+                          (incf offset n))
+                   (progn (incf current-col) (incf offset)))))
     ;; Loop ended at EOF: valid only if target is exactly EOF.
     (if (and (= current-line line) (= current-col col))
         offset

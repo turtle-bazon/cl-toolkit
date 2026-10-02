@@ -27,16 +27,34 @@
 
 ;;; --- Helper functions (defined before use) ---
 
+(defun whitespace-char-p (ch)
+  "True for any character the Lisp reader treats as whitespace.
+   CLHS 2.1.1: Space, Tab, Newline, Return, Page. Vt is an SBCL
+   extension, kept for parity with the reader we model."
+  (or (char= ch #\Space) (char= ch #\Tab) (char= ch #\Newline)
+      (char= ch #\Return) (char= ch #\Page) (char= ch #\Vt)))
+
+(defun line-break-char-p (ch)
+  "True for characters that end a line. CRLF is one break, not two:
+   callers must skip the LF of a CRLF pair."
+  (or (char= ch #\Newline) (char= ch #\Return)))
+
 (defun skip-whitespace-and-newlines (text offset)
-  "Skip whitespace and at most one newline after OFFSET."
+  "Skip whitespace and at most one line break after OFFSET."
   (let ((i offset) (len (length text)))
     (loop while (< i len)
           do (let ((ch (char text i)))
                (cond
-                 ((or (char= ch #\Space) (char= ch #\Tab))
-                  (incf i))
-                 ((char= ch #\Newline)
+                 ((char= ch #\Space) (incf i))
+                 ((char= ch #\Tab) (incf i))
+                 ((char= ch #\Page) (incf i))
+                 ((char= ch #\Vt) (incf i))
+                 ((line-break-char-p ch)
                   (incf i)
+                  ;; CRLF: consume the LF as part of the same break
+                  (when (and (char= ch #\Return)
+                             (< i len) (char= (char text i) #\Newline))
+                    (incf i))
                   (return))
                  (t (return)))))
     i))
@@ -1144,6 +1162,78 @@
       (t
        (values ni nl nc depth line-start-depth lines mode)))))
 
+(defun scan-comma-errors (text)
+  "Report commas that are not lexically inside a backquote.
+   SBCL (and the standard) treats a comma outside a backquote as a
+   reader error, so \"(a ,b)\" is invalid even though it looks like an
+   ordinary list. A backquote has no closing delimiter: its extent
+   runs to the end of the enclosing form, which is what the stack
+   models — a new bracket level INHERITS the enclosing flag, and
+   closing a bracket pops back to the outer one.
+   Returns a list of (:line :col :message) plists, in source order."
+  (let ((i 0) (len (length text))
+        (line 0) (col 0)
+        (flags '())            ; one entry per open bracket: backquote active?
+        (block-depth 0)
+        (mode :normal)
+        (errors '()))
+    (loop while (< i len) do
+      (let ((ch (char text i))
+            (nxt (and (< (1+ i) len) (char text (1+ i)))))
+        (case mode
+          (:line-comment
+           (when (char= ch #\Newline)
+             (setf mode :normal)
+             (incf line)
+             (setf col 0))
+           (incf col))
+          (:string
+           (cond ((char= ch #\\) (incf i) (incf col))
+                 ((char= ch #\")
+                  (setf mode :normal)
+                  (incf col))
+                 ((char= ch #\Newline) (incf line) (setf col 0))
+                 (t (incf col))))
+          (:bar
+           (cond ((char= ch #\\) (incf i) (incf col))
+                 ((char= ch #\|) (setf mode :normal) (incf col))
+                 ((char= ch #\Newline) (incf line) (setf col 0))
+                 (t (incf col))))
+          (otherwise
+           (cond
+             ;; Inside #| ... |# everything is literal text, commas
+             ;; included: only a nested block comment matters.
+             ((plusp block-depth)
+              (cond ((and nxt (char= ch #\#) (char= nxt #\|))
+                     (incf block-depth) (incf i) (incf col 2))
+                    ((and nxt (char= ch #\|) (char= nxt #\#))
+                     (decf block-depth) (incf i) (incf col 2))))
+             ((char= ch #\;) (setf mode :line-comment) (incf col))
+             ((char= ch #\") (setf mode :string) (incf col))
+             ((char= ch #\\) (incf i) (incf col))
+             ((and nxt (char= ch #\#) (char= nxt #\|))
+              (incf block-depth) (incf i) (incf col 2))
+             ((char= ch #\|) (setf mode :bar) (incf col))
+             ;; a backquote opens a scope for the rest of the form
+             ((char= ch #\`) (setf flags (cons t flags)) (incf col))
+             ;; a new bracket level inherits the enclosing flag
+             ((or (char= ch #\( ) (char= ch #\[) (char= ch #\{))
+              (setf flags (cons (car flags) flags))
+              (incf col))
+             ((or (char= ch #\) ) (char= ch #\]) (char= ch #\}))
+              (setf flags (cdr flags))
+              (incf col))
+             ((and (char= ch #\,)
+                   (or (null flags) (null (car flags))))
+              (push (list :line line :col col
+                          :message "Comma not inside a backquote")
+                    errors)
+              (incf col))
+             ((char= ch #\Newline) (incf line) (setf col 0))
+             (t (incf col))))))
+      (incf i))
+    (nreverse errors)))
+
 (defun balance-dispatch-normal (ch i text line col depth max-depth line-start-depth lines errors mode)
   "Dispatch normal mode (no double col increment)."
   (declare (ignore mode))
@@ -1210,6 +1300,10 @@
       (push (list :line line :col col
                   :message "Unclosed string at end of file")
             errors))
+    ;; A comma outside a backquote is a reader error; the balance walk
+    ;; above tracks no lexical backquote state, so scan for it here.
+    (dolist (err (scan-comma-errors text))
+      (push err errors))
     (when (eq mode :bar)
       (push (list :line line :col col
                   :message "Unclosed |...| symbol at end of file")
