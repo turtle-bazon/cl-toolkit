@@ -94,7 +94,7 @@ fi
 echo ""
 echo "--- delete-form output ---"
 cp /tmp/test-bugs.lisp /tmp/test-delete.lisp
-result=$($BIN delete-form --file /tmp/test-delete.lisp --line 4 --col 1 2>&1)
+result=$($BIN delete-form --file /tmp/test-delete.lisp --line 4 --col 2 --nearest 2>&1)
 if echo "$result" | grep -q "defun foo"; then
     echo "PASS: delete-form returns modified code"
     PASS=$((PASS + 1))
@@ -246,7 +246,7 @@ cat > /tmp/test-replace-scope.lisp << 'ENDOFFILE'
     (t
      (values stack nil))))
 ENDOFFILE
-result=$($BIN replace-form --file /tmp/test-replace-scope.lisp --line 5 --col 1 --replace '((or (string= tok "+")) (values stack (+ 1 2)))' 2>&1)
+result=$($BIN replace-form --file /tmp/test-replace-scope.lisp --line 5 --col 1 --nearest --replace '((or (string= tok "+")) (values stack (+ 1 2)))' 2>&1)
 # The replacement should only affect the clause on line 5, not the whole cond
 if echo "$result" | grep -q "defun foo" 2>/dev/null; then
     # This shouldn't happen - the defun foo test was from the earlier test file

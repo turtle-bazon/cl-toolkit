@@ -92,17 +92,25 @@
     (values line col)))
 
 (defun offset-to-line-col-inverse (text line col)
-  "Convert LINE and COL (0-indexed) to a 0-indexed byte offset."
+  "Convert LINE and COL (0-indexed) to a 0-indexed byte offset.
+   Signals an error when the position is out of range; the EOF position
+   (one past the last character) is valid for end-of-line appends."
+  (when (or (< line 0) (< col 0))
+    (error "Invalid position: line ~a, col ~a (must be >= 0)" line col))
   (let ((offset 0) (current-line 0) (current-col 0))
     (loop while (< offset (length text))
           do (when (and (= current-line line)
                         (= current-col col))
-               (return offset))
+               (return-from offset-to-line-col-inverse offset))
               (if (char= (char text offset) #\Newline)
                   (progn (incf current-line) (setf current-col 0))
                   (incf current-col))
               (incf offset))
-    offset))
+    ;; Loop ended at EOF: valid only if target is exactly EOF.
+    (if (and (= current-line line) (= current-col col))
+        offset
+        (error "Position out of range: line ~a, col ~a (file has ~a lines)"
+               line col (1+ current-line)))))
 
 ;;; JSON serialization using cl-json
 

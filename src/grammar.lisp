@@ -190,11 +190,13 @@
 ;;; Symbol. May start with a digit only if the whole token is not a
 ;;; valid number — the number rule is ordered before symbol in `form`,
 ;;; and its boundary checks make tokens like 1+/123abc fall through.
+;;; Head includes dot so lone "." (dotted-pair syntax) parses as a
+;;; symbol instead of failing the whole enclosing list.
 (defrule sign-char
     (or #\+ #\-))
 
 (defrule symbol-head-char
-    (or alpha digit #\- #\* #\+ #\! #\? #\_ #\= #\< #\> #\& #\/ #\~ #\@ #\$ #\% #\^ #\: #\# #\| #\` #\,))
+    (or alpha digit #\. #\- #\* #\+ #\! #\? #\_ #\= #\< #\> #\& #\/ #\~ #\@ #\$ #\% #\^ #\: #\# #\| #\` #\,))
 
 (defrule symbol-tail-char
     (or symbol-head-char #\. #\[ #\]))
@@ -208,12 +210,19 @@
     (and symbol-head-char (* symbol-tail-char))
   (:lambda (chars &bounds start end)
     (let ((full (esrap:text chars)))
-      (let ((colon (position #\: full)))
+      ;; Split on the LAST colon so "foo::bar" yields package "foo",
+      ;; name "bar" (not ":bar"). Leading ":" means keyword package.
+      (let ((colon (position #\: full :from-end t)))
         (if colon
-            (make-node :symbol
-                       :name (subseq full (1+ colon))
-                       :package (subseq full 0 colon)
-                       :start start :end end)
+            (let ((raw-pkg (subseq full 0 colon))
+                  (raw-name (subseq full (1+ colon))))
+              (make-node :symbol
+                         :name (string-left-trim ":" raw-name)
+                         :package (let ((trimmed (string-trim ":" raw-pkg)))
+                                    (if (> (length trimmed) 0)
+                                        trimmed
+                                        "KEYWORD"))
+                         :start start :end end))
             (make-node :symbol :name full :start start :end end))))))
 
 ;;; --- Compound rules ---
@@ -270,8 +279,11 @@
                :start start :end end)))
 
 ;;; Top-level form
+;;; NOTE: sharp-dispatch ("#" + vector-form) required "##(" and never
+;;; matched — vector-form already covers "#(...)". Removed from the
+;;; choice to avoid dead-branch confusion.
 (defrule form
-    (or comment sharp-dispatch list-form vector-form quote-form sharp-quote sharp-dot char-literal string-literal number symbol)
+    (or comment list-form vector-form quote-form sharp-quote sharp-dot char-literal string-literal number symbol)
   (:lambda (result)
     result))
 
@@ -388,10 +400,22 @@
           finally (return end))))
 
 (defun skip-whitespace (text pos end)
-  "Skip whitespace characters starting at POS."
-  (loop while (and (< pos end)
-                   (member (char text pos) '(#\Space #\Tab #\Newline #\Page #\;)))
-        do (incf pos))
+  "Skip whitespace and line comments starting at POS.
+   Bare ';' is not whitespace — the comment body must be skipped too,
+   otherwise recovery treats it as broken forms."
+  (loop while (< pos end)
+        do (let ((ch (char text pos)))
+             (cond
+               ((member ch '(#\Space #\Tab #\Newline #\Page #\Return))
+                (incf pos))
+               ((char= ch #\;)
+                ;; skip to (and past) the newline
+                (loop while (and (< pos end)
+                                (char/= (char text pos) #\Newline))
+                      do (incf pos))
+                (when (< pos end) (incf pos)))
+               (t (return pos))))
+        finally (return pos))
   pos)
 
 (defun offset-node (node offset)
@@ -405,7 +429,11 @@
 
 (defun try-parse-form-at (text pos end)
   "Try to parse a single form at POS.
-   Returns (values node new-pos) or (values nil skip-pos) on failure."
+   Leading whitespace/comments are skipped first (form itself does not
+   allow them). Returns (values node new-pos) or (values nil skip-pos)."
+  (setf pos (skip-whitespace text pos end))
+  (when (>= pos end)
+    (return-from try-parse-form-at (values nil end)))
   (let ((remaining (subseq text pos end))
         (*standard-output* (make-broadcast-stream))
         (*error-output* (make-broadcast-stream)))
@@ -420,13 +448,13 @@
                     (node (ignore-errors (successful-parse-production result))))
                 (if (and parse-end node)
                     (values (offset-node node pos) (skip-whitespace text (+ pos parse-end) end))
-                    (values nil (find-next-form-boundary text pos end))))
-              (values nil (find-next-form-boundary text pos end))))))))
+                    (values nil (skip-whitespace text (find-next-form-boundary text pos end) end))))
+              (values nil (skip-whitespace text (find-next-form-boundary text pos end) end))))))))
 
 (defun parse-with-recovery (text &optional (start 0) end)
   "Parse TEXT with error recovery. Returns AST with ERROR nodes."
   (let ((end (or end (length text)))
-        (pos start)
+        (pos (skip-whitespace text start (or end (length text))))
         (forms nil))
     (loop while (< pos end)
           do (multiple-value-bind (node new-pos)
@@ -446,7 +474,7 @@
                                    :value (string (char text pos))
                                    :start pos :end (1+ pos))
                         forms)
-                  (setf pos (1+ pos))))))
+                  (setf pos (skip-whitespace text (1+ pos) end))))))
     (make-node :list
                :children (nreverse forms)
                :source "source-file"

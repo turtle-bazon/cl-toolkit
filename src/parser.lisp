@@ -5,12 +5,16 @@
 ;;; ============================================================
 
 (defun parse-file (path)
-  "Parse a Lisp file at PATH. Returns AST root node."
+  "Parse a Lisp file at PATH. Returns AST root node.
+   Buffered read-to-EOF: FILE-LENGTH counts bytes, not characters,
+   so multibyte UTF-8 leaves NUL padding and pipes report bogus lengths."
   (let ((text (with-open-file (stream path :direction :input :if-does-not-exist nil)
                 (when stream
-                  (let ((content (make-string (file-length stream))))
-                    (read-sequence content stream)
-                    content)))))
+                  (with-output-to-string (out)
+                    (let ((buf (make-string 4096)))
+                      (loop for n = (read-sequence buf stream)
+                            do (write-sequence buf out :end n)
+                            while (= n (length buf)))))))))
     (unless text
       (error "Cannot read file: ~a" path))
     (let ((ast (cl-toolkit-grammar::parse-lisp-source text)))
@@ -326,7 +330,8 @@
       indent)))
 
 (defun indent-code-by (code additional-indent)
-  "Add ADDITIONAL-INDENT spaces to every line of CODE."
+  "Add ADDITIONAL-INDENT spaces to every non-blank line of CODE.
+   Blank lines stay empty to avoid trailing whitespace."
   (if (<= additional-indent 0)
       code
       (let ((prefix (make-string additional-indent :initial-element #\Space)))
@@ -338,13 +343,15 @@
                 while line-start
                 for line-end = (or (position #\Newline code :start line-start)
                                    (length code))
-                do (write-string prefix out)
-                   (write-string (subseq code line-start line-end) out)
+                for line-text = (subseq code line-start line-end)
+                do (unless (= (length (string-trim '(#\Space #\Tab) line-text)) 0)
+                     (write-string prefix out))
+                   (write-string line-text out)
                    (when (< line-end (length code))
                      (write-char #\Newline out)))))))
 
 (defun indent-continuation-lines (code additional-indent)
-  "Add ADDITIONAL-INDENT spaces to every line of CODE except the first.
+  "Add ADDITIONAL-INDENT spaces to every non-blank continuation line.
    The first line keeps its own leading whitespace — the splice point
    already accounts for the original form's base indentation."
   (if (<= additional-indent 0)
@@ -358,9 +365,11 @@
                 while line-start
                 for line-end = (or (position #\Newline code :start line-start)
                                    (length code))
-                do (unless (zerop line-start)
+                for line-text = (subseq code line-start line-end)
+                do (when (and (not (zerop line-start))
+                              (> (length (string-trim '(#\Space #\Tab) line-text)) 0))
                      (write-string prefix out))
-                   (write-string (subseq code line-start line-end) out)
+                   (write-string line-text out)
                    (when (< line-end (length code))
                      (write-char #\Newline out)))))))
 
@@ -422,43 +431,60 @@
     (when node
       (node-source-text text node))))
 
+(defun node-span (n)
+  "Length of NODE source span, or most-positive-fixnum when unbounded."
+  (if (and (node-start n) (node-end n))
+      (- (node-end n) (node-start n))
+      most-positive-fixnum))
+
+(defun smallest-node (nodes)
+  "Node with smallest span in NODES, or NIL."
+  (let ((best nil) (best-len most-positive-fixnum))
+    (dolist (n nodes best)
+      (let ((len (node-span n)))
+        (when (< len best-len)
+          (setf best n best-len len))))))
+
 (defun find-subform-matching (node text snippet)
-  "Find the smallest descendant form of NODE whose source matches SNIPPET.
+  "Find the smallest form rooted at NODE whose source matches SNIPPET.
+   NODE itself counts (whole-host match); otherwise smallest descendant.
    Exact trimmed match is preferred over a contains-match; among equals
    the smallest span wins. Returns NIL when nothing matches."
   (let ((exact nil)
         (contains nil))
-    (labels ((collect (n)
-               (dolist (child (node-children n))
-                 (let* ((raw (node-source-text text child))
-                        (trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) raw)))
+    (labels ((consider (n)
+               (when (and (node-start n) (node-end n))
+                 (let* ((raw (node-source-text text n))
+                        (trimmed (string-trim (list #\Space #\Tab #\Newline #\Return) raw)))
                    (cond
-                     ((string= trimmed snippet)
-                      (push child exact))
-                     ((search snippet raw)
-                      (push child contains)))
-                   (collect child)))))
+                     ((string= trimmed snippet) (push n exact))
+                     ((search snippet raw) (push n contains))))))
+             (collect (n)
+               (consider n)
+               (dolist (child (node-children n))
+                 (collect child))))
       (collect node)
-      (labels ((smallest (nodes)
-                 (first (sort nodes #'<
-                              :key #'(lambda (n) (- (node-end n) (node-start n)))))))
-        (cond
-          (exact (smallest exact))
-          (contains (smallest contains))
-          (t nil))))))
+      (cond
+        (exact (smallest-node exact))
+        (contains (smallest-node contains))
+        (t nil)))))
 
 (defun node-at-path (text node path)
   "Follow a slash-separated child-index PATH (e.g. \"3/0/1\") from NODE.
-   Returns the deepest node, or NIL when any step is out of range."
+   Returns the deepest node, or NIL when any step is out of range
+   (including malformed/non-numeric segments — never signals)."
   (declare (ignore text))
+  (when (or (null node) (null path) (= (length path) 0))
+    (return-from node-at-path nil))
   (let ((current node))
-    (dolist (step (mapcar #'parse-integer
-                          (split-string-on-char path #\/)))
-      (let ((kids (and current (node-children current))))
-        (unless (and kids (< step (length kids)))
+    (dolist (seg (split-string-on-char path #\/) current)
+      (let ((step (ignore-errors (parse-integer seg))))
+        (when (or (null step) (< step 0))
           (return-from node-at-path nil))
-        (setf current (nth step kids))))
-    current))
+        (let ((kids (and current (node-children current))))
+          (unless (and kids (< step (length kids)))
+            (return-from node-at-path nil))
+          (setf current (nth step kids)))))))
 
 (defun split-string-on-char (string sep-char)
   "Split STRING on SEP-CHAR, keeping empty segments."
@@ -479,17 +505,18 @@
     (values count (or first-offset -1))))
 
 (defun find-subform-matching-exact (node text snippet)
-  "Smallest descendant of NODE whose trimmed source equals SNIPPET.
+  "Smallest form rooted at NODE whose trimmed source equals SNIPPET.
    Like FIND-SUBFORM-MATCHING but never falls back to contains-matches —
-   anchor verification must not escalate silently."
+   anchor verification must not escalate silently. NODE itself counts."
   (let ((snippet (string-trim '(#\Space #\Tab #\Newline #\Return) snippet))
         (exact nil))
     (labels ((collect (n)
+               (when (and (node-start n) (node-end n)
+                          (string= (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                                (node-source-text text n))
+                                   snippet))
+                 (push n exact))
                (dolist (child (node-children n))
-                 (when (string= (string-trim '(#\Space #\Tab #\Newline #\Return)
-                                             (node-source-text text child))
-                                snippet)
-                   (push child exact))
                  (collect child))))
       (collect node)
       (when exact
@@ -514,7 +541,10 @@
             collect (nreverse offsets))))
 (defun find-forms-containing (text snippet &key recovery)
   "Return a list of (index node) pairs for top-level forms in TEXT
-   whose source contains SNIPPET."
+   whose source contains SNIPPET. Empty snippets match everything,
+   so they are rejected."
+  (when (or (null snippet) (= (length snippet) 0))
+    (error "Snippet must not be empty"))
   (let ((ast (parse-for-edit text recovery)))
     (loop for node in (list-top-level ast)
           for i from 0
@@ -719,10 +749,12 @@
                   new-code
                   (concatenate 'string new-code (string #\Newline)))))
     ;; empty (or whitespace-only) host: don't lead with a blank line
-    (if (= (length (string-trim '(#\Space #\Tab #\Newline) text)) 0)
+    (if (= (length (string-trim '(#\Space #\Tab #\Newline #\Return #\Page) text)) 0)
         code
         (concatenate 'string
-                     (string-trim '(#\Space #\Tab #\Newline) text)
+                     ;; right-trim only: leading blank lines/comments are
+                     ;; part of the file and must survive appends.
+                     (string-right-trim '(#\Space #\Tab #\Newline #\Return #\Page) text)
                      (string #\Newline)
                      code))))
 
@@ -846,25 +878,35 @@
       (return-from move-form text))
     (let* ((from-start (node-start from-node))
            (from-end (node-end from-node))
+           (to-start (node-start to-node))
+           (to-end (node-end to-node))
            (form-text (subseq text from-start from-end)))
-      ;; Step 1: Delete the source form's entire line.
-      ;; del-start includes the preceding newline so no blank line remains;
-      ;; del-end stops at the form's end (trailing parens belong to the parent).
-      (let* ((del-start (if (plusp from-start)
-                            (1- (preceding-line-start text from-start))
-                            0))
+      ;; Deletion region: include preceding newline (no blank left behind);
+      ;; when deleting at offset 0 there is no preceding newline, so instead
+      ;; consume one trailing newline to avoid a leading blank line.
+      (let* ((at-bob (zerop from-start))
+             (del-start (if at-bob 0 (1- (preceding-line-start text from-start))))
+             (del-end (if at-bob
+                          (skip-whitespace-and-newlines text from-end)
+                          from-end))
+             (deleted-len (- del-end del-start))
              (deleted-text-str (concatenate 'string
                                             (subseq text 0 del-start)
-                                            (subseq text from-end)))
-             ;; Step 2: Find where the destination landed after deletion
-             (dest-text (subseq text (node-start to-node) (node-end to-node)))
-             (dest-pos (search dest-text deleted-text-str)))
-        (unless dest-pos
+                                            (subseq text del-end)))
+             ;; Destination in post-deletion coordinates (offset arithmetic,
+             ;; not text search — duplicates must resolve to the right instance).
+             (dest-new-start (if (<= from-end to-start)
+                                 (- to-start deleted-len)
+                                 to-start))
+             (dest-new-end (if (<= from-end to-start)
+                               (- to-end deleted-len)
+                               to-end)))
+        (when (or (< dest-new-start 0) (> dest-new-end (length deleted-text-str)))
           (error "Destination form not found after deletion"))
         ;; Insert after the destination form, indented like it is,
         ;; with at least one newline of separation.
-        (let* ((dest-end (+ dest-pos (length dest-text)))
-               (indent (count-leading-spaces deleted-text-str dest-pos))
+        (let* ((dest-end dest-new-end)
+               (indent (count-leading-spaces deleted-text-str dest-new-start))
                (indented-form (concatenate 'string
                                            (make-string indent :initial-element #\Space)
                                            form-text))
@@ -921,7 +963,7 @@
                            (subseq result (node-end node))))))))
 
 ;;; ============================================================
-;;; Balance Analysis
+;;; Balance Analysis (0-based lines/cols, reader-aware)
 ;;; ============================================================
 
 (defun balance-record-line (line depth line-start-depth lines)
@@ -941,34 +983,25 @@
                     errors))
       (values (1- depth) errors)))
 
-(defun balance-process-line-comment (ch line col depth line-start-depth lines)
-  "Process character inside line comment. Returns updated state."
-  (if (char= ch #\Newline)
-      (values t (balance-record-line line depth line-start-depth lines) (1+ line) 1)
-      (values nil lines line (1+ col))))
-
-(defun balance-process-block-comment (ch i text line col)
-  "Process character inside block comment. Returns updated state."
-  (let ((new-i i) (new-line line) (new-col (1+ col)) (ended nil))
-    (when (and (char= ch #\|)
-               (< (1+ i) (length text))
-               (char= (char text (1+ i)) #\#))
-      (setf ended t new-i (+ i 2) new-col (+ col 2)))
-    (when (char= ch #\Newline)
-      (setf new-line (1+ line) new-col 1))
-    (values ended new-i new-line new-col)))
-
 (defun balance-process-string (ch i text line col)
-  "Process character inside string. Returns updated state."
-  (declare (ignore text))
-  (let ((new-i i) (new-line line) (new-col (1+ col)) (ended nil))
-    (when (char= ch #\Newline)
-      (setf new-line (1+ line) new-col 1))
-    (when (char= ch #\\)
-      (setf new-i (+ i 2) new-col (+ col 2)))
-    (when (char= ch #\")
-      (setf ended t))
-    (values ended new-i new-line new-col)))
+  "Process character inside string.
+   Returns (values ended-p new-i new-line new-col).
+   new-i is the index of the last consumed char (loop auto-increments).
+   Backslash escapes the next char (including an escaped quote)."
+  (cond
+    ;; escape: consume both chars (unless at EOF)
+    ((and (char= ch #\\)
+          (< (1+ i) (length text)))
+     (let ((nxt (char text (1+ i))))
+       (if (char= nxt #\Newline)
+           (values nil (1+ i) (1+ line) 0)
+           (values nil (1+ i) line (+ col 2)))))
+    ((char= ch #\Newline)
+     (values nil i (1+ line) 0))
+    ((char= ch #\")
+     (values t i line (+ col 1)))
+    (t
+     (values nil i line (+ col 1)))))
 
 (defun balance-process-hash (i text col)
   "Process # dispatch character. Returns (values new-i new-col in-block-comment).
@@ -1004,87 +1037,98 @@
     (#\; (values i col depth max-depth errors :line-comment))
     (#\# (multiple-value-bind (ni nc in-block) (balance-process-hash i text col)
            (values ni nc depth max-depth errors (if in-block :block-comment :normal))))
-    (#\" (values i (1+ col) depth max-depth errors :string))
-    (#\( (incf depth)
-         (values i (1+ col) depth (max max-depth depth) errors :normal))
+    (#\" (values i (+ col 1) depth max-depth errors :string))
+    (#\( (let ((nd (1+ depth)))
+           (values i (+ col 1) nd (max max-depth nd) errors :normal)))
     (#\) (multiple-value-bind (new-depth new-errors)
              (balance-check-close ch line col depth errors "paren")
-           (values i (1+ col) new-depth max-depth new-errors :normal)))
-    (#\[ (incf depth)
-         (values i (1+ col) depth (max max-depth depth) errors :normal))
+           (values i (+ col 1) new-depth max-depth new-errors :normal)))
+    (#\[ (let ((nd (1+ depth)))
+           (values i (+ col 1) nd (max max-depth nd) errors :normal)))
     (#\] (multiple-value-bind (new-depth new-errors)
              (balance-check-close ch line col depth errors "bracket")
-           (values i (1+ col) new-depth max-depth new-errors :normal)))
-    (#\{ (incf depth)
-         (values i (1+ col) depth (max max-depth depth) errors :normal))
+           (values i (+ col 1) new-depth max-depth new-errors :normal)))
+    (#\{ (let ((nd (1+ depth)))
+           (values i (+ col 1) nd (max max-depth nd) errors :normal)))
     (#\} (multiple-value-bind (new-depth new-errors)
              (balance-check-close ch line col depth errors "brace")
-           (values i (1+ col) new-depth max-depth new-errors :normal)))
-    (#\Newline (values i 1 depth max-depth errors :newline))
+           (values i (+ col 1) new-depth max-depth new-errors :normal)))
+    (#\Newline (values i 0 depth max-depth errors :newline))
     (t (values i (1+ col) depth max-depth errors :normal))))
 
 (defun balance-dispatch-line-comment (ch i text line col depth line-start-depth lines mode)
-  "Dispatch line comment mode. Returns updated state values."
+  "Dispatch line comment mode. Newline ends it (0-based)."
   (declare (ignore text))
-  (multiple-value-bind (ended new-lines new-line new-col)
-      (balance-process-line-comment ch line col depth line-start-depth lines)
-    (declare (ignore new-line new-col))
-    (when ended
-      (setf lines new-lines line-start-depth depth)
-      (incf line) (setf col 1)
-      (setf mode :normal))
-    (incf col)
-    (values i line col depth line-start-depth lines mode)))
+  (if (char= ch #\Newline)
+      (progn
+        (setf lines (balance-record-line line depth line-start-depth lines))
+        (values i (1+ line) 0 depth depth lines :normal))
+      (values i line (+ col 1) depth line-start-depth lines mode)))
 
-(defun balance-dispatch-block-comment (ch i text line col depth line-start-depth lines mode)
-  "Dispatch block comment mode. Returns updated state values."
-  (multiple-value-bind (ended ni nl nc)
-      (balance-process-block-comment ch i text line col)
-    (declare (ignore nl nc))
-    (when ended (setf i ni))
-    (when (char= ch #\Newline)
-      (setf line (1+ line) col 1))
-    (incf col)
-    (values i line col depth line-start-depth lines mode)))
+(defun balance-dispatch-block-comment (ch i text line col depth line-start-depth lines mode block-depth)
+  "Dispatch block comment mode with nesting. Returns updated state including BLOCK-DEPTH."
+  (cond
+    ((and (char= ch #\#)
+          (< (1+ i) (length text))
+          (char= (char text (1+ i)) #\|))
+     ;; nested opener
+     (values (1+ i) line (+ col 2) depth line-start-depth lines mode (1+ block-depth)))
+    ((and (char= ch #\|)
+          (< (1+ i) (length text))
+          (char= (char text (1+ i)) #\#))
+     (let ((nd (1- block-depth)))
+       (if (<= nd 0)
+           (values (1+ i) line (+ col 2) depth line-start-depth lines :normal 0)
+           (values (1+ i) line (+ col 2) depth line-start-depth lines mode nd))))
+    ((char= ch #\Newline)
+     (setf lines (balance-record-line line depth line-start-depth lines))
+     (values i (1+ line) 0 depth depth lines mode block-depth))
+    (t
+     (values i line (+ col 1) depth line-start-depth lines mode block-depth))))
 
 (defun balance-dispatch-string (ch i text line col depth line-start-depth lines mode)
-  "Dispatch string mode. Returns updated state values."
+  "Dispatch string mode with correct escape handling."
   (multiple-value-bind (ended ni nl nc)
       (balance-process-string ch i text line col)
-    (declare (ignore nl nc))
-    (when ended (setf i ni mode :normal))
-    (when (char= ch #\Newline)
-      (setf line (1+ line) col 1))
-    (incf col)
-    (values i line col depth line-start-depth lines mode)))
+    (cond
+      (ended
+       (values ni nl nc depth line-start-depth lines :normal))
+      ((and (= nl (1+ line)) (= nc 0))
+       ;; newline (or escaped newline) inside string ends visual line
+       (setf lines (balance-record-line line depth line-start-depth lines))
+       (values ni nl nc depth depth lines mode))
+      (t
+       (values ni nl nc depth line-start-depth lines mode)))))
 
 (defun balance-dispatch-normal (ch i text line col depth max-depth line-start-depth lines errors mode)
-  "Dispatch normal mode. Returns updated state values."
+  "Dispatch normal mode (no double col increment)."
+  (declare (ignore mode))
   (multiple-value-bind (ni nc nd nmax nerrors nmode)
       (balance-process-normal ch i text depth max-depth line col errors)
-    (setf i ni col nc depth nd max-depth nmax errors nerrors)
-    (when (eq nmode :line-comment) (setf mode :line-comment))
-    (when (eq nmode :block-comment) (setf mode :block-comment))
-    (when (eq nmode :string) (setf mode :string))
-    (when (eq nmode :newline)
-      (push (list :line line :depth depth
-                  :delta (- depth line-start-depth))
-            lines)
-      (setf line-start-depth depth)
-      (incf line) (setf col 1))
-    (incf col)
-    (values i line col depth max-depth line-start-depth lines errors mode)))
+    (cond
+      ((eq nmode :newline)
+       (setf lines (balance-record-line line nd line-start-depth lines))
+       (values ni (1+ line) 0 nd nmax nd lines nerrors :normal))
+      ((eq nmode :line-comment)
+       (values ni line nc nd nmax line-start-depth lines nerrors :line-comment))
+      ((eq nmode :block-comment)
+       (values ni line nc nd nmax line-start-depth lines nerrors :block-comment))
+      ((eq nmode :string)
+       (values ni line nc nd nmax line-start-depth lines nerrors :string))
+      (t
+       (values ni line nc nd nmax line-start-depth lines nerrors :normal)))))
 
 (defun analyze-balance (text)
   "Analyze parenthesis/bracket balance in TEXT.
+   Lines/cols are 0-based to match every other command.
    Returns a plist with:
      :lines - list of plists (:line :depth :delta) per source line
      :max-depth - maximum nesting depth
      :final-depth - depth at end of file (0 = balanced)
      :errors - list of error plists (:line :col :message)"
-  (let ((depth 0) (max-depth 0) (line 1) (col 1)
+  (let ((depth 0) (max-depth 0) (line 0) (col 0)
         (line-start-depth 0) (lines nil) (errors nil)
-        (mode :normal))
+        (mode :normal) (block-depth 0))
     (loop for i from 0 below (length text)
           for ch = (char text i)
           do (case mode
@@ -1092,20 +1136,30 @@
                 (multiple-value-setq (i line col depth line-start-depth lines mode)
                   (balance-dispatch-line-comment ch i text line col depth line-start-depth lines mode)))
                (:block-comment
-                (multiple-value-setq (i line col depth line-start-depth lines mode)
-                  (balance-dispatch-block-comment ch i text line col depth line-start-depth lines mode)))
+                (multiple-value-setq (i line col depth line-start-depth lines mode block-depth)
+                  (balance-dispatch-block-comment ch i text line col depth line-start-depth lines mode block-depth)))
                (:string
                 (multiple-value-setq (i line col depth line-start-depth lines mode)
                   (balance-dispatch-string ch i text line col depth line-start-depth lines mode)))
                (:normal
                 (multiple-value-setq (i line col depth max-depth line-start-depth lines errors mode)
-                  (balance-dispatch-normal ch i text line col depth max-depth line-start-depth lines errors mode)))))
+                  (balance-dispatch-normal ch i text line col depth max-depth line-start-depth lines errors mode))
+                (when (eq mode :block-comment)
+                  (setf block-depth 1)))))
     (push (list :line line :depth depth
                 :delta (- depth line-start-depth))
           lines)
     (when (/= depth 0)
       (push (list :line line :col col
                   :message (format nil "Unclosed forms: depth ~a at end of file" depth))
+            errors))
+    (when (eq mode :block-comment)
+      (push (list :line line :col col
+                  :message "Unclosed block comment #| at end of file")
+            errors))
+    (when (eq mode :string)
+      (push (list :line line :col col
+                  :message "Unclosed string at end of file")
             errors))
     (list :lines (nreverse lines)
           :max-depth max-depth
@@ -1139,7 +1193,7 @@
       (values line-pos nil)))
 
 (defun format-process-block-comment (ch i text result line-pos)
-  "Process character inside block comment."
+  "Process character inside block comment. Returns (values line-pos ended-p new-i)."
   (write-char ch result)
   (incf line-pos)
   (cond
@@ -1147,24 +1201,25 @@
           (< (1+ i) (length text))
           (char= (char text (1+ i)) #\#))
      (write-char (char text (1+ i)) result)
-     (incf i) (incf line-pos)
-     (values line-pos t))
+     (incf line-pos)
+     (values line-pos t (1+ i)))
     ((char= ch #\Newline)
-     (values 0 nil))
-    (t (values line-pos nil))))
+     (values 0 nil i))
+    (t (values line-pos nil i))))
 
 (defun format-process-string (ch i text result line-pos)
-  "Process character inside string."
+  "Process character inside string. Returns (values line-pos ended-p new-i).
+   Backslash consumes the next char so an escaped quote never ends the string."
   (write-char ch result)
   (incf line-pos)
   (cond
     ((and (char= ch #\\) (< (1+ i) (length text)))
      (write-char (char text (1+ i)) result)
-     (incf i) (incf line-pos)
-     (values line-pos nil))
+     (incf line-pos)
+     (values line-pos nil (1+ i)))
     ((char= ch #\")
-     (values line-pos t))
-    (t (values line-pos nil))))
+     (values line-pos t i))
+    (t (values line-pos nil i))))
 
 (defun format-process-hash (ch i text depth indent result line-pos need-indent)
   "Process # dispatch character. Returns (values new-i new-line-pos new-need-indent new-mode).
@@ -1209,10 +1264,13 @@
     (values lp nil (1+ depth))))
 
 (defun format-process-close-delimiter (ch depth indent result line-pos need-indent)
-  "Process closing delimiter. Returns (values new-line-pos new-need-indent new-depth).
+  "Process closing delimiter. Dedents first when starting a line, then writes.
    Clamps depth to 0 — unmatched close delimiters don't make depth negative."
-  (declare (ignore indent need-indent))
   (let ((new-depth (max 0 (1- depth))))
+    (when need-indent
+      ;; closing paren aligns with its opener: indent at new (dedented) depth
+      (write-string (indent-string new-depth indent) result)
+      (setf line-pos (* new-depth (length indent))))
     (write-char ch result)
     (values (1+ line-pos) nil new-depth)))
 
@@ -1225,22 +1283,22 @@
     (values line-pos mode need-indent)))
 
 (defun format-dispatch-block-comment (ch i text result line-pos mode need-indent)
-  "Dispatch block comment mode. Returns updated state."
-  (multiple-value-bind (lp ended)
+  "Dispatch block comment mode. Returns (values line-pos mode need-indent new-i)."
+  (multiple-value-bind (lp ended ni)
       (format-process-block-comment ch i text result line-pos)
-    (setf line-pos lp)
+    (setf line-pos lp i ni)
     (when ended (setf mode :normal))
     (when (char= ch #\Newline)
       (setf line-pos 0 need-indent t))
-    (values line-pos mode need-indent)))
+    (values line-pos mode need-indent i)))
 
 (defun format-dispatch-string (ch i text result line-pos mode)
-  "Dispatch string mode. Returns updated state."
-  (multiple-value-bind (lp ended)
+  "Dispatch string mode. Returns (values line-pos mode new-i)."
+  (multiple-value-bind (lp ended ni)
       (format-process-string ch i text result line-pos)
-    (setf line-pos lp)
+    (setf line-pos lp i ni)
     (when ended (setf mode :normal))
-    (values line-pos mode)))
+    (values line-pos mode i)))
 
 (defun format-dispatch-space (ch i text depth indent result line-pos need-indent)
   "Dispatch whitespace character. Returns updated state."
@@ -1337,10 +1395,10 @@
                 (multiple-value-setq (line-pos mode need-indent)
                   (format-dispatch-line-comment ch i text result line-pos mode need-indent)))
                (:block-comment
-                (multiple-value-setq (line-pos mode need-indent)
+                (multiple-value-setq (line-pos mode need-indent i)
                   (format-dispatch-block-comment ch i text result line-pos mode need-indent)))
                (:string
-                (multiple-value-setq (line-pos mode)
+                (multiple-value-setq (line-pos mode i)
                   (format-dispatch-string ch i text result line-pos mode)))
                 (:normal
                  (multiple-value-setq (i line-pos need-indent mode depth)

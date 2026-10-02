@@ -22,12 +22,11 @@
               while (= n (length buf)))))))
 
 (defun read-stdin ()
-  "Read all input from stdin."
+  "Read all input from stdin byte-exactly (no added trailing newline)."
   (with-output-to-string (out)
-    (loop for line = (read-line *standard-input* nil nil)
-          while line
-          do (write-string line out)
-             (terpri out))))
+    (loop for ch = (read-char *standard-input* nil nil)
+          while ch
+          do (write-char ch out))))
 
 (defun read-input (cmd)
   "Read input from --code, --file, or stdin (in that order)."
@@ -43,10 +42,20 @@
   (cl-toolkit-ast::node-to-json node *standard-output*)
   (terpri))
 
+(defvar *diff-counter* 0)
+
 (defun generate-unified-diff (old-text new-text file-path)
-  "Generates a unified diff string between OLD-TEXT and NEW-TEXT."
-  (let ((tmp-old (asdf:system-relative-pathname :cl-toolkit "tmp-old.txt"))
-        (tmp-new (asdf:system-relative-pathname :cl-toolkit "tmp-new.txt")))
+  "Generates a unified diff string between OLD-TEXT and NEW-TEXT.
+   Uses unique tmp names (pid + counter + random) so concurrent runs
+   never clobber each other (fixed tmp-old.txt race)."
+  (let* ((pid (random 1000000))
+         (uniq (format nil "cl-toolkit-diff-~a-~a-~a" (or pid "x")
+                       (incf *diff-counter*) (random 1000000)))
+         (base (merge-pathnames uniq (uiop:temporary-directory)))
+         (tmp-old (make-pathname :name (pathname-name base)
+                                 :type "old" :defaults base))
+         (tmp-new (make-pathname :name (pathname-name base)
+                                 :type "new" :defaults base)))
     (unwind-protect
          (progn
            (with-open-file (s tmp-old :direction :output :if-exists :supersede)
@@ -119,7 +128,9 @@
      fidelity — sibling packages exist).
    * --compile-check-package PKG: stub-create PKG (:use CL) when
      missing — handles single-file-against-project-package checks."
-  (let ((fasl (format nil "/tmp/ctk-compile-check-~d.fasl" (get-universal-time))))
+  (let ((fasl (format nil "/tmp/ctk-compile-check-~a-~a-~a.fasl"
+                      (random 1000000)
+                      (get-universal-time) (random 1000000))))
     (handler-case
         (let ((*standard-output* (make-broadcast-stream))
               (*error-output* (make-broadcast-stream)))
@@ -165,7 +176,7 @@
                  name
                  "."
                  stamp
-                 (when type ".")
+                 "."
                  (or type "lisp")
                  ".bak")))
 
@@ -498,23 +509,27 @@
 ;;; ============================================================
 
 (defun find/handler (cmd)
-  (let* ((line (clingon:getopt cmd :line))
-         (col (clingon:getopt cmd :col))
-         (text (read-input cmd))
-         (ast (cl-toolkit-grammar::parse-lisp-source text))
-         (found (find-form-at ast text line col)))
-    (if found
-        ;; Enrich with resolved 0-based line/col so callers can verify
-        ;; that the position they asked for maps to the form they expect.
-        (multiple-value-bind (l c)
-            (cl-toolkit-ast::offset-to-line-col text (node-start found))
-          (let ((copy (copy-list found)))
-            (setf (getf copy :line) l
-                  (getf copy :col) c)
-            (output-json copy)))
-        (progn
-          (format *error-output* "No form found at line ~a, col ~a~%" line col)
-          (clingon:exit 1)))))
+  (handler-case
+      (let* ((line (clingon:getopt cmd :line))
+             (col (clingon:getopt cmd :col))
+             (text (read-input cmd))
+             (ast (cl-toolkit-grammar::parse-lisp-source text))
+             (found (find-form-at ast text line col)))
+        (if found
+            ;; Enrich with resolved 0-based line/col so callers can verify
+            ;; that the position they asked for maps to the form they expect.
+            (multiple-value-bind (l c)
+                (cl-toolkit-ast::offset-to-line-col text (node-start found))
+              (let ((copy (copy-list found)))
+                (setf (getf copy :line) l
+                      (getf copy :col) c)
+                (output-json copy)))
+            (progn
+              (format *error-output* "No form found at line ~a, col ~a~%" line col)
+              (clingon:exit 1))))
+    (error (c)
+      (format *error-output* "Error: ~a~%" c)
+      (clingon:exit 1))))
 
 (defun find/command ()
   (clingon:make-command
@@ -531,18 +546,18 @@
                                   :long-name "code"
                                   :description "Inline code to search"
                                   :key :code)
-             (clingon:make-option :integer
-                                  :long-name "line"
-                                  :short-name #\l
-                                  :description "Line number (1-indexed)"
-                                  :required t
-                                  :key :line)
-             (clingon:make-option :integer
-                                  :long-name "col"
-                                  :short-name #\c
-                                  :description "Column number (1-indexed)"
-                                  :required t
-                                  :key :col))
+              (clingon:make-option :integer
+                                   :long-name "line"
+                                   :short-name #\l
+                                   :description "Line number (0-based)"
+                                   :required t
+                                   :key :line)
+              (clingon:make-option :integer
+                                   :long-name "col"
+                                   :short-name #\c
+                                   :description "Column number (0-based)"
+                                   :required t
+                                   :key :col))
    :handler #'find/handler
    :examples '(("Find form at line 5, col 2:" . "cl-toolkit find -f myfile.lisp -l 5 -c 2"))))
 
@@ -921,17 +936,19 @@
     (unless (and line col code)
       (format *error-output* "Error: --line, --col, and --insert are required~%")
       (clingon:exit 1))
-    ;; Find the offset from line/col
-    (let ((offset (cl-toolkit-ast::offset-to-line-col-inverse text line col)))
-      (when (null offset)
-        (format *error-output* "Error: Invalid position (~a, ~a)~%" line col)
-        (clingon:exit 1))
-      ;; Insert text at offset
-      (let ((result (concatenate 'string
-                                 (subseq text 0 offset)
-                                 code
-                                 (subseq text offset))))
-        (deliver-edit-result result original-text file preview write quiet)))))
+    ;; Find the offset from line/col (signals on OOB — convert to exit 1)
+    (handler-case
+        (let ((offset (cl-toolkit-ast::offset-to-line-col-inverse text line col)))
+          ;; Insert text at offset
+          (let ((result (concatenate 'string
+                                     (subseq text 0 offset)
+                                     code
+                                     (subseq text offset))))
+            (validate-edited-source result recovery no-validate-result file)
+            (deliver-edit-result result original-text file preview write quiet)))
+      (error (c)
+        (format *error-output* "Error: Invalid position (~a, ~a): ~a~%" line col c)
+        (clingon:exit 1)))))
 
 (defun insert-at/command ()
   (clingon:make-command
@@ -1188,18 +1205,21 @@
 
 
 (defun subform-candidates (node text snippet)
-  "Return (values exact-list contains-list): descendants of NODE whose
-   trimmed source equals SNIPPET, and those merely containing it.
+  "Return (values exact-list contains-list): NODE itself plus descendants
+   whose trimmed source equals SNIPPET, and those merely containing it.
    Lists are smallest-span-first."
   (let ((exact nil) (contains nil))
-    (labels ((collect (n)
-               (dolist (child (node-children n))
-                 (let* ((raw (node-source-text text child))
+    (labels ((consider (n)
+               (when (and (node-start n) (node-end n))
+                 (let* ((raw (node-source-text text n))
                         (trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) raw)))
                    (cond
-                     ((string= trimmed snippet) (push child exact))
-                     ((search snippet raw) (push child contains)))
-                   (collect child))))
+                     ((string= trimmed snippet) (push n exact))
+                     ((search snippet raw) (push n contains))))))
+             (collect (n)
+               (consider n)
+               (dolist (child (node-children n))
+                 (collect child)))
              (by-size (nodes)
                (sort nodes #'<
                      :key #'(lambda (n) (- (node-end n) (node-start n))))))
@@ -1300,10 +1320,9 @@
     (unless (or (and line col) index name end contains-arg match)
       (format *error-output* "Error: --end, --name, --index, --contains, --match, or --line/--col required~%")
       (clingon:exit 1))
-    ;; Empty --replace with --match deletes the matched subform.
-    (unless (or code (and match (null code)))
-      (format *error-output* "Error: --replace is required~%")
-      (clingon:exit 1))
+    ;; Validate replacement input (empty string means delete-match — parses
+    ;; as zero forms, which is valid).
+    (validate-new-code code no-validate-input)
     (handler-case
         (let* ((match-alone (and match (not (or name index end contains-arg (and line col)))))
                (resolved-global
@@ -1507,6 +1526,7 @@
       (handler-case
           (let ((result (move-form text from-line from-col to-line to-col
                                    :recovery recovery)))
+            (validate-edited-source result recovery no-validate-result file)
             (deliver-edit-result result original-text file preview write quiet))
         (error (c)
           (output-edit-result nil (format nil "~a" c)))))))
@@ -1578,23 +1598,26 @@
       (handler-case
           (let* ((edits-list (cl-json:decode-json-from-string edits-json))
                  (edit-plists (mapcar (lambda (e)
-                                        (let ((op-str (cdr (assoc :operation e)))
-                                              (code (cdr (assoc :code e)))
-                                              (name-val (cdr (assoc :name e)))
-                                              (match-val (cdr (assoc :match e)))
-                                              (index-val (cdr (assoc :index e)))
-                                              (line-val (cdr (assoc :line e)))
-                                              (col-val (cdr (assoc :col e))))
-                                          (list :operation (if op-str
-                                                               (intern (string-upcase op-str) :keyword)
-                                                               :replace-index)
-                                                :code code
-                                                :name name-val
-                                                :match match-val
-                                                :index index-val
-                                                :line line-val
-                                                :col col-val
-                                                :pretty pretty)))
+                                        (labels ((getk (k)
+                                                   (or (cdr (assoc k e))
+                                                       (cdr (assoc (intern (string-upcase (symbol-name k))
+                                                                           :keyword)
+                                                                   e)))))
+                                          (let ((op-str (or (getk :operation) (getk :op))))
+                                            (unless op-str
+                                              (error "Batch edit missing :operation: ~s" e))
+                                            (list :operation (intern (string-upcase op-str) :keyword)
+                                                  :code (getk :code)
+                                                  :name (getk :name)
+                                                  :match (getk :match)
+                                                  :match-exact (getk :match-exact)
+                                                  :first (getk :first)
+                                                  :occurrence (getk :occurrence)
+                                                  :allow-fuzzy (getk :allow-fuzzy)
+                                                  :index (getk :index)
+                                                  :line (getk :line)
+                                                  :col (getk :col)
+                                                  :pretty (or (getk :pretty) pretty)))))
                                       edits-list))
                  (result (apply-batch-edits text edit-plists :recovery recovery)))
             (validate-edited-source result recovery no-validate-result file)
@@ -1687,12 +1710,17 @@
           (select (clingon:getopt cmd :select))
           (source
             (if child-index
-                ;; verbatim source of the CHILD-INDEX-th direct child of the named form
-                (let* ((host (find-top-level-by-name text name :recovery recovery))
-                       (kids (and host (node-children host))))
+                ;; verbatim source of the CHILD-INDEX-th direct child
+                ;; (host may be --name/--index/--end)
+                (let* ((host (or (when name (find-top-level-by-name text name :recovery recovery))
+                                 (when (not (null index))
+                                   (top-level-node-at text index :recovery recovery))
+                                 (when end (first (last (list-top-level (parse-for-edit text recovery)))))))
+                       (kids (and host (node-children host)))
+                       (label (or name (when (not (null index)) (format nil "index ~a" index)) "last")))
                   (unless (and kids (< child-index (length kids)))
                     (error "No child at index ~a in '~a' (~a children)"
-                           child-index name (length kids)))
+                           child-index label (length kids)))
                   (node-source-text text (nth child-index kids)))
                 (source-of-top-level text
                                      :name name :index index :end end
@@ -2084,9 +2112,11 @@
          (recovery (clingon:getopt cmd :recovery))
          (text-a (read-input cmd))
          (file-b (resolve-file-path against-file))
+         ;; When no --against-file, compare within the same source
+         ;; (name vs against-name). Never re-read stdin (already consumed).
          (text-b (if file-b
                      (read-file-to-string file-b)
-                     (read-input cmd))))
+                     text-a)))
     (unless name
       (format *error-output* "Error: --name is required~%")
       (clingon:exit 1))
@@ -2157,7 +2187,10 @@
                ;; of the host's last child.
                (anchor (if match
                            (multiple-value-list
-                            (resolve-replace-target text host match :match-exact match-exact))
+                            (resolve-replace-target text host match
+                                                    :match-exact match-exact
+                                                    :first first-flag
+                                                    :occurrence occurrence))
                            (list (first (last (node-children host))))))
                (clause (first anchor))
                (fuzzy-p (second anchor)))
@@ -2264,11 +2297,15 @@
       (when (and match child-path)
         (format *error-output* "Error: --match and --child-path are mutually exclusive~%")
         (clingon:exit 1))
-      (unless (and name (or match child-path) new-name lambda-list call)
-        (format *error-output*
-                "Error: --name, --match, --as, --lambda-list, --call are all required~%")
-        (clingon:exit 1))
-      (validate-new-code code no-validate-input)
+      (let ((call-form-opt (or call code)))
+        (unless (and name (or match child-path) new-name lambda-list call-form-opt)
+          (format *error-output*
+                   "Error: --name, --match/--child-path, --as, --lambda-list, --call/--replace are all required~%")
+          (clingon:exit 1))
+        (validate-new-code call-form-opt no-validate-input)
+        ;; normalize: downstream uses CODE (from --replace/--code-file) or CALL
+        (when (and (null code) call)
+          (setf code call)))
       (handler-case
           (let* ((host (or (find-top-level-by-name text name :recovery recovery)
                            (error "No top-level form named '~a'" name)))
@@ -2511,7 +2548,7 @@
                       Line/col arguments and all output are 0-based; ~
                       editor grep -n line numbers are 1-based."
    :authors '("cl-agent-validate")
-   :license "MIT"
+   :license "GPL-3.0"
    :handler (lambda (cmd) (clingon:print-usage-and-exit cmd t))
    :sub-commands (list
                     (parse/command)

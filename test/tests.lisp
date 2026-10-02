@@ -175,7 +175,7 @@
          (result (delete-form-at text 1 0)))
     (is (stringp result))
     (is (search "foo" result))
-    (not (search "bar" result))))
+    (is (not (search "bar" result)))))
 
 (test insert-form-at-valid
   (let* ((text "(foo)")
@@ -328,8 +328,8 @@
     (multiple-value-bind (exact contains)
         (subform-candidates top text "(v s)")
       (is (= 2 (length exact)))
-      ;; the two cond clauses + the cond itself all contain the snippet
-      (is (= 3 (length contains))))))
+      ;; two clauses + cond + host defun itself all contain the snippet
+      (is (= 4 (length contains))))))
 
 (test subform-candidates-unique
   (let* ((text "(defun d () (cond ((eq x :a) (v s)) ((eq x :b) (other))))")
@@ -337,11 +337,11 @@
     (multiple-value-bind (exact contains)
         (subform-candidates top text "(v s)")
       (is (= 1 (length exact)))
-      (is (= 2 (length contains))))
+      (is (= 3 (length contains))))
     (multiple-value-bind (exact2 contains2)
         (subform-candidates top text "(other)")
       (is (= 1 (length exact2)))
-      (is (= 2 (length contains2))))))
+      (is (= 3 (length contains2))))))
 
 ;;; 0.5.0 — path addressing + atomic extraction helpers
 
@@ -384,3 +384,100 @@
            (is (search "→" content))
            (is (search "İı" content)))
       (ignore-errors (delete-file path)))))
+
+;;; Bugfix batch: 2026-10 audit
+
+(test recovery-leading-whitespace
+  (let ((ast (parse-with-recovery "  (+ 1 2)")))
+    (is (eq :list (node-type ast)))
+    (is (= 1 (length (node-children ast))))
+    (is (eq :list (node-type (first (node-children ast)))))))
+
+(test recovery-line-comment-skipped
+  (let ((ast (parse-with-recovery (format nil "; hi~%(+ 1 2)"))))
+    ;; comment is skipped via skip-whitespace: only the form remains
+    (is (= 1 (length (node-children ast))))
+    (is (eq :list (node-type (first (node-children ast)))))))
+
+(test dotted-pair-parses
+  (let* ((ast (parse-lisp-source "(a . b)"))
+         (form (first (node-children ast))))
+    (is (eq :list (node-type form)))
+    (is (= 3 (length (node-children form))))))
+
+(test package-split-double-colon
+  (let* ((ast (parse-lisp-source "foo::bar"))
+         (sym (first (node-children ast))))
+    (is (string= "bar" (node-name sym)))
+    (is (string= "foo" (node-package sym)))))
+
+(test package-split-keyword
+  (let* ((ast (parse-lisp-source ":foo"))
+         (sym (first (node-children ast))))
+    (is (string= "foo" (node-name sym)))))
+
+(test offset-inverse-oob-signals
+  (is (null (ignore-errors (cl-toolkit-ast:offset-to-line-col-inverse "(a)" 10 0)))))
+
+(test offset-inverse-eof-ok
+  (is (= 4 (cl-toolkit-ast:offset-to-line-col-inverse (format nil "(a)~%") 1 0))))
+
+(test insert-end-preserves-leading-blanks
+  (let ((result (insert-form-end (format nil "~%~%(a)") "(b)")))
+    (is (search "(a)" result))
+    (is (search "(b)" result))
+    ;; leading blank lines survive (right-trim only)
+    (is (char= #\Newline (char result 0)))))
+
+(test timestamped-backup-dot
+  (let ((p (cl-toolkit::timestamped-backup-path "foo" "/tmp/bak")))
+    (is (search ".lisp.bak" p))))
+
+(test node-at-path-malformed-nil
+  (let* ((txt "(a)")
+         (host (first (list-top-level (parse-lisp-source txt)))))
+    (is (null (node-at-path txt host "x")))
+    (is (null (node-at-path txt host "")))
+    (is (null (node-at-path txt host "3/0")))))
+
+(test subform-whole-host-matches
+  (let* ((txt "(defun foo () 1)")
+         (top (first (list-top-level (parse-lisp-source txt)))))
+    (is (not (null (find-subform-matching top txt txt))))
+    (is (not (null (find-subform-matching-exact top txt txt))))))
+
+(test balance-escaped-quote
+  (let ((result (analyze-balance (format nil "(a ~s)" "b\\\"(c"))))
+    (is (= 0 (getf result :final-depth)))))
+
+(test balance-zero-based-lines
+  (let ((result (analyze-balance "(a)")))
+    (is (= 0 (getf (first (getf result :lines)) :line)))))
+
+(test balance-block-comment-ends
+  (let ((result (analyze-balance "#| hi |# (a)")))
+    (is (= 0 (getf result :final-depth)))
+    (is (= 1 (getf result :max-depth)))))
+
+(test move-first-no-leading-newline
+  (let ((result (move-form (format nil "(a)~%(b)~%(c)") 0 0 2 0)))
+    (is (not (char= #\Newline (char result 0))))
+    (is (search "(a)" result))
+    (is (search "(c)" result))))
+
+(test move-duplicate-resolves-by-offset
+  ;; two identical forms: moving first after second must keep both
+  (let* ((txt (format nil "(foo)~%(foo)~%(bar)"))
+         (result (move-form txt 0 0 1 0)))
+    (is (= 3 (length (list-top-level (parse-lisp-source result)))))
+    (is (search "(bar)" result))))
+
+(test indent-no-trailing-ws
+  (let ((result (cl-toolkit::indent-continuation-lines
+                 (format nil "(a)~%~%(b)") 2)))
+    ;; blank middle line must stay empty (no trailing spaces)
+    (is (search (format nil "~%~%  (b)") result))
+    (is (search "(b)" result))))
+
+(test find-forms-empty-rejected
+  (is (null (ignore-errors (find-forms-containing "(a)" "")))))
