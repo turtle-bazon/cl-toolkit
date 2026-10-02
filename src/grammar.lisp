@@ -30,7 +30,7 @@
     (or digit alpha))
 
 (defrule symbol-char
-    (or alphanumeric #\- #\* #\+ #\! #\? #\_ #\= #\< #\> #\& #\/ #\~ #\@ #\$ #\% #\^ #\. #\: #\# #\| #\[ #\] #\` #\,))
+    (or alphanumeric #\- #\* #\+ #\! #\? #\_ #\= #\< #\> #\& #\/ #\~ #\@ #\$ #\% #\^ #\. #\: #\# #\| #\[ #\] #\{ #\} #\` #\,))
 
 ;;; --- Comment rules ---
 
@@ -380,7 +380,9 @@
 
 (defrule symbol-head-char
     (or alpha digit unicode-constituent
-        #\. #\- #\* #\+ #\! #\? #\_ #\= #\< #\> #\& #\/ #\~ #\@ #\$ #\% #\^ #\: #\# #\| #\` #\,))
+        #\. #\- #\* #\+ #\! #\? #\_ #\= #\< #\> #\& #\/ #\~ #\@ #\$ #\% #\^ #\: #\# #\| #\` #\,
+        ;; a name may START with a bracket: "[1]" is |[1]|, not a list
+        #\[ #\] #\{ #\}))
 
 ;;; Symbol constituent escapes: \X is literal X, |...| quotes an
 ;;; arbitrary span (spaces and parens included). Found in the wild as
@@ -418,7 +420,9 @@
     (esrap:text parts)))
 
 (defrule symbol-tail-char
-    (or symbol-escape bar-segment symbol-head-char #\. #\[ #\]))
+    ;; [ ] { } are constituent characters, not delimiters (CLHS 2.1.3),
+    ;; so they continue a name just like #\. does
+    (or symbol-escape bar-segment symbol-head-char #\. #\[ #\] #\{ #\}))
 
 (defrule symbol-head
     (or symbol-escape bar-segment symbol-head-char))
@@ -461,7 +465,14 @@
 
 ;;; --- Compound rules ---
 
-;;; List (parenthesized form)
+;;; List (parenthesized form).
+;;;
+;;; Only "(" and ")" delimit a list. CLHS 2.1.3 also calls [ ] { } open and
+;;; close brackets, but it makes them constituent characters, and the
+;;; reader honours that: "[1]" reads as the SYMBOL |[1]|, "{a}b" as
+;;; |{A}B|, and "(let ([x 1]) ...)" does NOT bind x. Treating them as
+;;; delimiters here would silently disagree with every reader, so they
+;;; go to `symbol-head-char'/`symbol-tail-char' instead.
 (defrule list-form
     (and #\( ws (* (and form ws)) ws #\))
   (:destructure (open ws1 forms-ws ws2 close &bounds start end)
@@ -539,14 +550,27 @@
 ;;; Feature conditionals #+ / #-. Previously parsed as a stray symbol
 ;;; ("#+sbcl") plus the guarded form — two top-level forms instead of
 ;;; one. Wrapped so the file's top-level shape stays accurate.
+(defrule feature-target
+  ;; try the real grammar first so live branches keep a proper AST
+  (or form skip-form))
+
 (defrule feature-form
-    (and (or "#+" "#-") ws form ws form)
+    (and (or "#+" "#-") ws form ws feature-target)
   (:destructure (marker ws1 feat ws2 target &bounds start end)
     (declare (ignore ws1 ws2))
     (make-node :list
                :children (list (make-node :symbol :name marker
-                                          :start start :end (+ start 2))
-                               feat target)
+                                          :start start
+                                          :end (+ start 2))
+                               feat
+                               ;; `form' yields a node, `skip-form' raw text
+                               (if (stringp target)
+                                   (make-node :symbol
+                                              :name (if (plusp (length target))
+                                                        target "<skipped>")
+                                              :start (cl-toolkit-ast:node-end feat)
+                                              :end end)
+                                   target))
                :start start :end end)))
 
 ;;; Structure / complex / pathname / array / bit-vector literals.
@@ -742,16 +766,107 @@
             ;; the "|#" terminator was already handled in the block-depth
             ;; case above, so it must not be tested again here
             ((char= ch #\|) (setf mode :bar))
-            ((or (char= ch #\( ) (char= ch #\[) (char= ch #\{))
+            ;; only "(" nests: [ ] { } are constituent characters
+            ((char= ch #\()
              (push block-depth block-stack)
              (incf depth)
              (when (> depth max-depth) (setf max-depth depth)))
-            ((or (char= ch #\) ) (char= ch #\]) (char= ch #\}))
+            ((char= ch #\))
              (when (plusp depth)
                (decf depth)
                (pop block-stack)))))
         (incf i))
       (values max-depth (nreverse cuts)))))
+
+(defun skip-ws-and-comments (text pos end)
+  "Skip whitespace, line comments and block comments from POS.
+   Iterative, so a comment-only megabyte costs no stack."
+  (let ((i pos))
+    (loop
+      (when (>= i end) (return i))
+      (let ((ch (char text i)))
+        (cond
+          ((whitespace-char-p ch) (incf i))
+          ((char= ch #\;)
+           (loop while (and (< i end) (not (char= (char text i) #\Newline)))
+                 do (incf i)))
+          ((and (char= ch #\#) (< (1+ i) end) (char= (char text i) #\|))
+           (let ((level 1))
+             (incf i 2)
+             (loop while (and (< i end) (plusp level)) do
+               (cond ((and (char= (char text i) #\#)
+                           (< (1+ i) end) (char= (char text (1+ i)) #\|))
+                      (incf level) (incf i 2))
+                     ((and (char= (char text i) #\|)
+                           (< (1+ i) end) (char= (char text (1+ i)) #\#))
+                      (decf level) (incf i 2))
+                     (t (incf i))))))
+          ;; a lone "#" or any other non-form character: stop and let the
+          ;; caller report it
+          (t (return i)))))))
+
+(defun skip-one-form (text position end)
+  "Iteratively find the end of the form starting at POSITION.
+   Returns the position just past it, or NIL when nothing is consumed.
+   Deliberately permissive: this only has to find a form's extent, not
+   validate it."
+  (let ((i (skip-ws-and-comments text position end)))
+    (when (>= i end) (return-from skip-one-form nil))
+    (let ((ch (char text i)))
+      (cond
+        ;; a quote-like macro applies to the form that follows
+        ((or (char= ch #\') (char= ch #\`) (char= ch #\,))
+         (skip-one-form text (1+ i) end))
+        ((or (char= ch #\( ) (char= ch #\[) (char= ch #\{))
+         (let ((start i) (depth 0))
+           (loop while (< i end) do
+             (let ((c (char text i)))
+               (cond
+                 ((char= c #\;)
+                  (loop while (and (< i end)
+                                   (not (char= (char text i) #\Newline)))
+                        do (incf i)))
+                 ((char= c #\")
+                  (loop while (< i end) do
+                    (incf i)
+                    (when (char= (char text (1- i)) #\")
+                      (return))))
+                 ((and (char= c #\#) (< (1+ i) end) (char= (char text (1+ i)) #\|))
+                  ;; nested block comment: run to its "|#"
+                  (loop while (< i end) do
+                    (incf i)
+                    (when (and (< i end) (char= (char text i) #\|)
+                               (> i start) (char= (char text (1- i)) #\#))
+                      (return))))
+                 ((char= c #\\) (incf i))
+                 ((or (char= c #\( ) (char= c #\[) (char= c #\{)) (incf depth))
+                 ((char= c #\))
+                  (decf depth)
+                  (when (zerop depth) (return)))))
+             (incf i))
+           (when (zerop depth) (max (1+ start) i))))
+        (t
+         ;; an atom: run to the next delimiter
+         (loop while (and (< i end)
+                          (not (whitespace-char-p (char text i)))
+                          ;; [ ] { } are constituents, so an atom such as
+                          ;; [foo] runs to the next real delimiter
+                          (not (member (char text i) '(#\( #\) #\" #\;))))
+               do (incf i))
+         (when (> i position) i))))))
+
+(defun skip-form-text (text position end)
+  "esrap terminal: the raw text of one form, matched without validating
+   it. A feature conditional's branch is never even read by the reader
+   when the feature is absent, so a file may legitimately contain
+   \"#-other-lisp #\\Name-Only-That-Lisp-Knows\" and still load fine."
+  (let ((stop (skip-one-form text position end)))
+    (if stop
+        (values (subseq text position stop) stop nil)
+        (values nil position nil))))
+
+(defrule skip-form
+  (function skip-form-text))
 
 (defun too-deep-error-node (start end depth)
   (make-node :error
@@ -865,12 +980,9 @@
                   (#\" (setf in-string t))
                   (#\| (setf in-bar t))
                   (#\\ (when (< (1+ i) end) (incf i)))
+                  ;; only parens delimit; brackets are constituents
                   (#\( (incf depth))
                   (#\) (if (zerop depth) (return (1+ i)) (decf depth)))
-                  (#\[ (incf depth))
-                  (#\] (if (zerop depth) (return (1+ i)) (decf depth)))
-                  (#\{ (incf depth))
-                  (#\} (if (zerop depth) (return (1+ i)) (decf depth)))
                (#\# (when (and (< (1+ i) end) (char= (char text (1+ i)) #\|))
                           (incf block-depth) (incf i))
                      ;; skip #\NAME / #\X char literals whole so a #\| never

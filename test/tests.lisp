@@ -515,6 +515,17 @@
 (defun char-value (code)
   (node-value (first (top-forms-of code))))
 
+(defun single-symbol-name (code)
+  "Name of the single symbol CODE reads as. Fails the test loudly if
+   CODE is anything other than exactly one symbol."
+  (let ((forms (top-forms-of code)))
+    (unless (= 1 (length forms))
+      (error "not a single form: ~s" code))
+    (let ((node (first forms)))
+      (unless (eq (node-type node) :symbol)
+        (error "not a symbol: ~s" code))
+      (node-name node))))
+
 (defun code-rejected-p (code)
   "T when CODE does not parse into a single clean form (an :ERROR root,
    or an :ERROR anywhere in the tree — recovery hides inner failures)."
@@ -550,13 +561,13 @@
   "A char that continues a name must not degrade into char + symbol."
   (dolist (code '("#\\Nulx" "#\\Sp!" "#\\Spac" "#\\ |" "#\\A{" "#\\AB"
                   "#\\Space!" "#\\Nul\\" "#\\ 7" "#\\Lockx"))
-    (is (code-rejected-p code) (code=~s should be rejected~% code))))
+    (is (code-rejected-p code) "code=~s should be rejected~%" code)))
 
 (test char-name-stoppers-accepted
   "Whitespace, delimiters and EOF legitimately end a char name."
   (dolist (code '("(list #\\Space)" "(list #\\Space x)" "(list #\\Space(x))"
                   "(list #\\Space\"s\")" "(list #\\A)"))
-    (is (not (code-rejected-p code)) (code=~s should parse~% code))))
+    (is (not (code-rejected-p code)) "code=~s should parse~%" code)))
 
 (test backquote-single-form
   (let* ((ast (parse-lisp-source "`(a ,b)"))
@@ -644,7 +655,7 @@
                       "#| block |# (a)"
                       "(list #\\a #\\Space \"s\")"))
     (let ((text (crlf code)))
-      (is (not (code-rejected-p text)) (code=~s should parse as CRLF~% code))
+      (is (not (code-rejected-p text)) "code=~s should parse as CRLF~%" code)
       (is (= (length (top-forms-of (format nil code)))
              (length (top-forms-of text)))
           "CRLF must yield the same forms as LF"))))
@@ -746,7 +757,7 @@
                   "Em" "Sub" "Esc" "Escape" "Fs" "Gs" "Rs" "Us" "Space"
                   "Sp" "Rubout" "Delete" "Del" "Alt" "Altmode" "Lock"))
     (let ((code (concatenate 'string "#\\" name)))
-      (is (not (code-rejected-p code)) (code=~s should be a name~% code))))
+      (is (not (code-rejected-p code)) "code=~s should be a name~%" code)))
   ;; case-insensitive, and a longer name must not be truncated
   (is (string= "NULL" (char-value "#\\null")))
   (is (string= "NULL" (char-value "#\\NULL")))
@@ -783,7 +794,7 @@
   ;; an empty string body consumes nothing, which esrap rejects unless
   ;; the terminal explicitly reports success-without-progress
   (dolist (code (list "\"\"" "\"\" \"\"" "(a \"\")" "\"\"\"\""))
-    (is (not (code-rejected-p code)) (code=~s should parse~% code)))
+    (is (not (code-rejected-p code)) "code=~s should parse~%" code))
   (is (string= "" (char-value "\"\""))))
 
 (test block-comment-is-opaque
@@ -792,19 +803,92 @@
                       "#| , |# (b)"
                       "#| #| , |# , |# (b)"
                       "#| (unbalanced |# (b)"))
-    (is (not (code-rejected-p code)) (code=~s should parse~% code)))
+    (is (not (code-rejected-p code)) "code=~s should parse~%" code))
   ;; deleting a quote inside a block comment changes nothing
   (is (= 1 (length (top-forms-of (format nil "#| \" |# (a)"))))))
+
+;;; --- Feature conditionals skip unreadable branches ---------------
+;;; The reader never even looks at the branch of an absent feature, so
+;;; a file may legally contain "#-other-lisp #\Name-Only-That-Lisp-Knows"
+;;; and still load. We validate live branches with the real grammar and
+;;; fall back to a permissive scan for anything else.
+
+(test feature-conditional-skips-foreign-branch
+  (dolist (code (list "(list #-other-lisp #\\Name-Only-That-Lisp-Knows)"
+                      "(list #+other-lisp #\\Replacement-Character)"
+                      "(let ((x #-(or abcl lispworks) #\\Some-Other-Lisp-Name))
+                         x)"
+                      "(list #+sbcl #| a block comment |# 5)"))
+    (is (not (code-rejected-p code)) "code=~s should parse~%" code)))
+
+(test feature-conditional-keeps-live-branch-ast
+  ;; a branch that IS valid keeps a real AST, not a raw-text blob
+  (let* ((kids (node-children (first-form-of "(list #+sbcl (a b))")))
+         (branch (second kids))
+         (branch-kids (node-children branch)))
+    (is (string= "list" (node-name (first kids))))
+    (is (eq :list (node-type branch)))
+    ;; children: the "#+" marker, the feature, and the target form
+    (is (= 3 (length branch-kids)))
+    (is (eq :list (node-type (third branch-kids))))
+    (is (= 2 (length (node-children (third branch-kids))))))
+  ;; and the whole conditional is still ONE top-level form
+  (is (= 1 (length (top-forms-of "#+sbcl (a)")))))
+
+;;; --- Brackets are constituent characters, not delimiters ---------
+;;; CLHS 2.1.3 makes [ ] { } constituent characters, and every reader
+;;; honours that: "[1]" is the SYMBOL |[1]|, not a list holding 1. A
+;;; parser that treats them as delimiters disagrees with the reader it
+;;; is supposed to model -- and the disagreement is silent, because the
+;;; enclosing form still parses, just with the wrong shape.
+
+(test brackets-are-symbol-constituents
+  (dolist (code (list "[1]" "[]" "{}" "{a}" "[1 2]" "[a]b" "{a}b" "[|a|]"
+                      "1]" "1}" "1{" "1[" "(f [1])" "(f [1] [2])"
+                      "[#\\a]" "(let ([x 1]) x)"))
+    (is (not (code-rejected-p code)) "code=~s should parse~%" code)))
+
+(test bracket-symbols-have-the-right-names
+  (is (string= "[1]" (single-symbol-name "[1]")))
+  (is (string= "[]" (single-symbol-name "[]")))
+  ;; a space still ends a name, so "[1 2]" is the two symbols [1 and 2]
+  (let ((forms (top-forms-of "[1 2]")))
+    (is (= 2 (length forms)))
+    (is (string= "[1" (node-name (first forms))))
+    (is (string= "2]" (node-name (second forms)))))
+  ;; the AST keeps the name as written (it does not upcase symbols)
+  (is (string= "[a]b" (single-symbol-name "[a]b")))
+  (is (string= "{a}b" (single-symbol-name "{a}b")))
+  (is (string= "1]" (single-symbol-name "1]")))
+  ;; ... and the bracket is part of the name, not a wrapper: [1] is one
+  ;; symbol, while (f [1]) is a two-element list F / [1]
+  (let ((kids (node-children (first-form-of "(f [1])"))))
+    (is (= 2 (length kids)))
+    (is (string= "f" (node-name (first kids))))
+    (is (string= "[1]" (node-name (second kids))))))
+
+(test unmatched-bracket-is-still-an-error
+  ;; brackets being constituents does not make them balance: a stray
+  ;; ")" still closes a list that was never opened
+  (dolist (code (list "[)]" "[1)" "(1}"))
+    (is (code-rejected-p code) "code=~s should fail~%" code)))
+
+(test unknown-single-word-char-names-still-rejected
+  ;; SBCL knows a large table of Unicode names (#\CARON, #\BREVE); we
+  ;; know the ASCII mnemonics plus underscore-separated names. Refusing
+  ;; an unknown name is the safe direction, so these stay errors.
+  (dolist (code (list "#\\Caron" "#\\Breve" "#\\NBSP" "#\\AB"))
+    (is (code-rejected-p code) "code=~s is not a name we know~%" code)))
 
 (test comma-outside-backquote-is-an-error
   (dolist (code (list "(a ,b)" "(a ,@b)" "(a . ,b)" ",x" ",@x"
                       "(list #,x)" "'(a ,b)" "(a `(b)) ,c"))
-    (is (plusp (comma-error-count code)) (code=~s should be flagged~% code))))
+    (is (plusp (comma-error-count code)) "code=~s should be flagged~%" code)))
 
 (test comma-inside-backquote-is-fine
   (dolist (code (list "`x" "`(a ,b)" "`(a ,@b)" "(a `(b ,c))"
                       "(a `(b `(c ,d)))" "(let ((x 1)) `,x)"))
-    (is (zerop (comma-error-count code)) (code=~s should be clean~% code)))
+    (is (zerop (comma-error-count code)) "code=~s should be clean~%" code))
   (is (zerop (comma-error-count "(a \"str,with,commas\")"))
       "commas inside strings are not commas")
   (is (zerop (comma-error-count "(a |,c|)"))
@@ -816,8 +900,13 @@
   (is (plusp (length (getf (analyze-balance "(a \"open") :errors))))
   (is (plusp (length (getf (analyze-balance "#| never closed") :errors))))
   (is (plusp (length (getf (analyze-balance ")") :errors))))
-  (is (= 1 (getf (analyze-balance "[a") :final-depth)))
-  (is (= 3 (getf (analyze-balance "{[(") :max-depth))))
+  (is (= 1 (getf (analyze-balance "(a") :final-depth)))
+  (is (= 3 (getf (analyze-balance "(((") :max-depth)))
+  ;; [ ] { } are constituent characters, not brackets: they neither open
+  ;; a level nor complain about being unclosed (CLHS 2.1.3)
+  (is (= 0 (getf (analyze-balance "[a") :final-depth)))
+  (is (= 1 (getf (analyze-balance "{[(") :max-depth))) ; only the ( counts
+  (is (zerop (length (getf (analyze-balance "]a[") :errors)))))
 
 (test format-close-dedent
   (is (string= (format nil "(a~%)") (format-source (format nil "(a~%)"))))
