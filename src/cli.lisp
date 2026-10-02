@@ -49,7 +49,7 @@
    Uses unique tmp names (pid + counter + random) so concurrent runs
    never clobber each other (fixed tmp-old.txt race)."
   (let* ((pid (random 1000000))
-         (uniq (format nil "cl-toolkit-diff-~a-~a-~a" (or pid "x")
+         (uniq (format nil "cl-toolkit-diff-~a-~a-~a" pid
                        (incf *diff-counter*) (random 1000000)))
          (base (merge-pathnames uniq (uiop:temporary-directory)))
          (tmp-old (make-pathname :name (pathname-name base)
