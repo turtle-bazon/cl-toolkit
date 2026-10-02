@@ -95,6 +95,55 @@ check move-by-name-no-target 1 "$BIN" move-form -f "$TMP/base.lisp" --name alpha
 check replace-file-alias 0 sh -c "printf '(defun z () 9)' > '$TMP/rf.txt' && cp '$TMP/base.lisp' '$TMP/rf.lisp' && $BIN replace-form -f '$TMP/rf.lisp' --name alpha --match-file /dev/null --replace-file '$TMP/rf.txt' --write --quiet 2>/dev/null || $BIN replace-form -f '$TMP/rf.lisp' --name alpha --replace-file '$TMP/rf.txt' --write --quiet; grep -q '(defun z () 9)' '$TMP/rf.lisp'"
 check unknown-command 64 "$BIN" definitely-not-a-command
 
+# --- reader-macro + unicode coverage (real-lib sweep findings) ---
+mk reader.lisp '(defun λlist (x) x)
+`(a ,b ,@c)
+#+sbcl (defun feat () 1)
+#S(my-struct (slot 1))
+#*101
+'
+check parse-reader-forms 0 "$BIN" parse --file "$TMP/reader.lisp"
+check balance-circular 0 "$BIN" balance --code "'#1=(#1#)"
+check top-level-json 0 "$BIN" top-level --file "$TMP/base.lisp"
+check find-ok 0 "$BIN" find -f "$TMP/base.lisp" --line 0 --col 0
+check find-bad 1 "$BIN" find -f "$TMP/base.lisp" --line 99 --col 0
+check extract-ok 0 "$BIN" extract -f "$TMP/base.lisp" --line1 0 --col1 0 --line2 1 --col2 0
+check validate-recovery 0 "$BIN" validate --file "$TMP/base.lisp" --recovery
+check format-canonical 0 "$BIN" format --file "$TMP/base.lisp" --canonical
+cp "$TMP/base.lisp" "$TMP/e9.lisp"
+check delete-end 0 "$BIN" delete-form -f "$TMP/e9.lisp" --end --write --quiet
+cp "$TMP/base.lisp" "$TMP/e10.lisp"
+check delete-index 0 "$BIN" delete-form -f "$TMP/e10.lisp" --index 0 --write --quiet
+cp "$TMP/base.lisp" "$TMP/e11.lisp"
+check delete-contains 0 "$BIN" delete-form -f "$TMP/e11.lisp" --contains "(gamma)" --write --quiet
+check move-positional 0 sh -c "cp '$TMP/base.lisp' '$TMP/mv2.lisp' && $BIN move-form -f '$TMP/mv2.lisp' --from-line 0 --from-col 0 --to-line 2 --to-col 2 --write --quiet && grep -q beta '$TMP/mv2.lisp'"
+check batch-missing-op 1 "$BIN" batch-replace -f "$TMP/base.lisp" --edits '[{"code":"(x)"}]' --write --quiet
+check source-index 0 sh -c "$BIN source-of -f '$TMP/base.lisp' --index 0 >/dev/null"
+check source-child-index 0 sh -c "$BIN source-of -f '$TMP/base.lisp' --index 1 --child-index 0 >/dev/null"
+check source-child-bad 1 "$BIN" source-of -f "$TMP/base.lisp" --name beta --child-index 99
+check source-tree 0 sh -c "$BIN source-of -f '$TMP/base.lisp' --name beta --tree >/dev/null"
+check find-forms-source 0 "$BIN" find-forms -f "$TMP/base.lisp" --contains gamma --with-source
+mk dupes.lisp '(defun same () 1)
+(defun same () 1)
+'
+check lint-dupes 1 "$BIN" lint -f "$TMP/dupes.lisp"
+check diff-same 0 "$BIN" diff-forms -f "$TMP/base.lisp" --name alpha
+check diff-names 1 "$BIN" diff-forms -f "$TMP/base.lisp" --name alpha --against-name beta
+cp "$TMP/base.lisp" "$TMP/e12.lisp"
+check patch-span-pos 0 "$BIN" patch-span -f "$TMP/e12.lisp" --line 2 --col 2 --old "(gamma)" --new "(delta)" --write --quiet
+check patch-span-mismatch 1 "$BIN" patch-span -f "$TMP/base.lisp" --line 0 --col 0 --old "(zzz)" --new "(x)"
+cp "$TMP/base.lisp" "$TMP/e13.lisp"
+check insert-text 0 "$BIN" insert -f "$TMP/e13.lisp" --line 0 --col 0 --insert ";; " --write --quiet
+check insert-bad-pos 1 "$BIN" insert -f "$TMP/base.lisp" --line 99 --col 0 --insert "x" --write --quiet
+check insert-form-missing 1 "$BIN" insert-form -f "$TMP/base.lisp" --line 0 --col 0 --write --quiet
+cp "$TMP/base.lisp" "$TMP/e14.lisp"
+check insert-in-nomatch 0 "$BIN" insert-in -f "$TMP/e14.lisp" --name beta --insert "(delta)" --write --quiet
+cp "$TMP/base.lisp" "$TMP/e15.lisp"
+check append-name 0 "$BIN" append-form -f "$TMP/e15.lisp" --name alpha --insert "(tail)" --write --quiet
+check extract-alias 0 sh -c "cp '$TMP/base.lisp' '$TMP/ex2.lisp' && $BIN extract-clause -f '$TMP/ex2.lisp' --name beta --match '(gamma)' --as gamma-helper --lambda-list '()' --replace '(gamma-helper)' --write --quiet"
+check extract-child-path 0 sh -c "cp '$TMP/base.lisp' '$TMP/ex3.lisp' && $BIN extract-clause -f '$TMP/ex3.lisp' --name beta --child-path '3' --as gamma-helper --lambda-list '()' --call '(gamma-helper)' --as-expression --write --quiet"
+check match-exact-refusal 1 "$BIN" replace-form -f "$TMP/base.lisp" --name beta --match "gamm" --match-exact --replace "z" --preview
+
 # --- cond-clause extraction modes (0.5.1) ---
 mk cond.lisp '(defun resolve-token (upper)
   (cond

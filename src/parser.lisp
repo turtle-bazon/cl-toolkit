@@ -1029,7 +1029,10 @@
       ((and (< next-i (length text))
             (char= (char text next-i) #\())
        (values i (+ col 1) nil))
-      (t (values next-i (1+ col) nil)))))
+      ;; Generic #X: consume ONLY the # — the next char may be structural
+      ;; (the #1# idiom ends in # followed by ); swallowing it undercounts
+      ;; depth (alexandria tests.lisp + babel false-unbalanced field cases).
+      (t (values i (+ col 1) nil)))))
 
 (defun balance-process-normal (ch i text depth max-depth line col errors)
   "Process character in normal code mode. Returns updated state."
@@ -1311,11 +1314,12 @@
   (values line-pos need-indent i))
 
 (defun format-dispatch-hash (ch i text depth indent result line-pos need-indent mode)
-  "Dispatch # character. Returns updated state."
+  "Dispatch # character. Returns updated state.
+   Passes NINDENT through: after emitting #.. we're mid-line, so a
+   following space is real (dropping it ate the gap in |# (a))."
   (multiple-value-bind (ni lp nindent nmode)
       (format-process-hash ch i text depth indent result line-pos need-indent)
-    (declare (ignore nindent))
-    (values ni lp need-indent (or nmode mode))))
+    (values ni lp nindent (or nmode mode))))
 
 (defun format-dispatch-delimiter (ch depth indent result line-pos need-indent openp)
   "Dispatch delimiter character. OPENP is T for open, NIL for close.

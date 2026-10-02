@@ -262,8 +262,49 @@ else
     FAIL=$((FAIL + 1))
 fi
 
+# Test 16: unicode + reader macros from the real-lib sweep (trivia/iterate)
+echo ""
+echo "--- unicode/reader lib-sweep regressions ---"
+result=$($BIN top-level --code "(defun λlist (x) x)" --names 2>&1)
+if echo "$result" | grep -q "λlist"; then
+    echo "PASS: unicode defun name"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL: unicode defun name"
+    echo "  Got: $result"
+    FAIL=$((FAIL + 1))
+fi
+result=$($BIN top-level --code '#+sbcl (defun f () 1)' --names 2>&1)
+if [ "$(echo "$result" | wc -l)" -eq 1 ]; then
+    echo "PASS: feature conditional is one top-level form"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL: feature conditional top-level count"
+    echo "  Got: $result"
+    FAIL=$((FAIL + 1))
+fi
+printf '%s' "'#(\a |b| |cD|)" > /tmp/test-escvec.lisp
+result=$($BIN parse --file /tmp/test-escvec.lisp 2>&1)
+if echo "$result" | grep -q '"type":"ERROR"'; then
+    echo "FAIL: escaped/bar symbols should parse"
+    echo "  Got: $result"
+    FAIL=$((FAIL + 1))
+else
+    echo "PASS: escaped/bar symbols parse"
+    PASS=$((PASS + 1))
+fi
+result=$($BIN balance --code "'#1=(#1#)" 2>&1)
+if echo "$result" | grep -q '"balanced":true'; then
+    echo "PASS: circular balance"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL: circular balance"
+    echo "  Got: $result"
+    FAIL=$((FAIL + 1))
+fi
+
 # Cleanup
-rm -f /tmp/test-bugs.lisp /tmp/test-replace.lisp /tmp/test-insert.lisp /tmp/test-format.lisp /tmp/test-delete.lisp /tmp/test-charlit.lisp /tmp/test-charlit2.lisp /tmp/test-charlit3.lisp /tmp/test-format-write.lisp /tmp/test-balance-hash.lisp /tmp/test-balance-hash2.lisp /tmp/test-balance-hash3.lisp /tmp/test-complex-hash.lisp /tmp/test-replace-scope.lisp
+rm -f /tmp/test-bugs.lisp /tmp/test-replace.lisp /tmp/test-insert.lisp /tmp/test-format.lisp /tmp/test-delete.lisp /tmp/test-charlit.lisp /tmp/test-charlit2.lisp /tmp/test-charlit3.lisp /tmp/test-format-write.lisp /tmp/test-balance-hash.lisp /tmp/test-balance-hash2.lisp /tmp/test-balance-hash3.lisp /tmp/test-complex-hash.lisp /tmp/test-replace-scope.lisp /tmp/test-escvec.lisp
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

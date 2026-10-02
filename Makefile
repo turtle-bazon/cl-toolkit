@@ -12,7 +12,7 @@ help:
 	@echo "  make clean        - Remove compiled artifacts"
 	@echo "  make test         - Run FiveAM unit/regression tests"
 	@echo "  make smoke-test   - Quick CLI smoke test"
-	@echo "  make ci           - Per-command CLI matrix (29 assertions)"
+	@echo "  make ci           - Per-command CLI matrix + compile gates"
 	@echo "  make help         - Show this help"
 
 build: $(wildcard src/*.lisp) cl-toolkit.asd
@@ -20,7 +20,7 @@ build: $(wildcard src/*.lisp) cl-toolkit.asd
 	$(SBCL) --eval '(ql:quickload :asdf)' \
 	        --eval '(push #P"./" asdf:*central-registry*)' \
 	        --eval '(asdf:operate (quote asdf:program-op) :cl-toolkit/bin)' \
-	        --eval '(ext:quit)'
+	        --eval '(uiop:quit)'
 
 ci: build
 	@bash test/cli-matrix.sh ./build/cl-toolkit

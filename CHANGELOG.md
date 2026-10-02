@@ -3,6 +3,39 @@
 All notable changes to cl-toolkit. During 0.x, breaking changes are
 marked `BREAKING:`.
 
+## [Unreleased]
+
+### Fixed
+
+- **Reader coverage from a 455-file/17-lib sweep (alexandria, babel,
+  trivia, iterate, cffi, hunchentoot, ...): 3 parse errors + 3
+  balance disagreements, all fixed, sweep now fully clean.**
+  - Unicode symbols (`:λlist`, `λlist`): `alpha` is now
+    `alpha-char-p`-based instead of ASCII-only. Single-char literals
+    keep their case (`#\a` value `"a"`, was `"A"`).
+  - Backquote/comma: `` `(a ,b ,@c) `` is one `BACKQUOTE` form with
+    `UNQUOTE`/`UNQUOTE-SPLICING` children (was a stray `` ` `` symbol
+    plus the list).
+  - `#+`/`#-`, `#S`, `#C`, `#P`, `#N A`, `#*`: single wrapped forms
+    (were stray marker symbols inflating top-level counts).
+  - Symbol escapes and bar segments: `\a`, `|a b|`, `|(a)|` (iterate
+    test suite failed to parse before).
+  - Balance `#`-dispatch consumed the char after `#`, swallowing `)`
+    in `#1#` (alexandria/babel false "unbalanced").
+  - Format dropped the space after block comments (`#| hi |# (a)`):
+    `format-dispatch-hash` discarded the cleared indent flag.
+- **`make build` always exited non-zero** (`ext:quit` package does not
+  exist in SBCL): now `uiop:quit`.
+- **`offset-to-line-col-inverse` clamped OOB positions to EOF**,
+  silently appending on bad `--line/--col`: now signals, and edit
+  commands fail loudly (insert/text still allows the exact EOF spot).
+
+### Tests
+
+- FiveAM 139 -> 290 checks (reader regressions, balance/format,
+  single/batch edit ops, match-ambiguity policies, move directions).
+- CLI matrix 62 -> 102 checks; format 21 -> 26; bugfix 18 -> 22.
+
 ## [0.5.3] - 2026-08-24
 
 ### Fixed

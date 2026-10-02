@@ -137,6 +137,37 @@ check "balance #\\)" \
   "(+ 1 #\\))" \
   "(+ 1 #\\))"
 
+# --- Reader + dedent regressions (lib-sweep findings) ---
+echo "--- Reader + dedent regressions ---"
+
+check "close paren dedents to column 0" \
+  "$(printf '(defun f ()\n1\n)')" \
+  "$(printf '(defun f ()\n  1\n)')"
+
+check "escaped quote inside string survives" \
+  '(a "b\"c")' \
+  '(a "b\"c")'
+
+check "block comment preserved" \
+  "#| hi |# (a)" \
+  "#| hi |# (a)"
+
+check "circular ref unchanged" \
+  "'#1=(#1#)" \
+  "'#1=(#1#)"
+
+# Backquote/comma via files: inline double-quoted backquotes would trigger
+# shell command substitution, so compare file round-trips instead.
+echo "--- Backquote file round-trip ---"
+printf '%s' "'\`(a ,b)" > /tmp/fmt-bq.lisp
+result=$($BIN format --file /tmp/fmt-bq.lisp --canonical 2>/dev/null)
+if [ "$result" = "'\`(a ,b)" ]; then
+  pass "backquote unchanged"
+else
+  fail "backquote unchanged" "$result" "'\`(a ,b)"
+fi
+rm -f /tmp/fmt-bq.lisp
+
 # --- Summary ---
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

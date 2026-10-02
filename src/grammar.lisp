@@ -20,8 +20,11 @@
 (defrule digit
     (character-ranges (#\0 #\9)))
 
+;;; Unicode-aware: (alpha-char-p character) matches one character
+;;; satisfying the predicate (parser.common-rules uses the same idiom).
+;;; ASCII-only ranges broke real code (:λlist in trivia => hard ERROR).
 (defrule alpha
-    (character-ranges (#\a #\z) (#\A #\Z)))
+    (alpha-char-p character))
 
 (defrule alphanumeric
     (or digit alpha))
@@ -167,7 +170,10 @@
 
 ;;; Character literal
 (defrule char-name
-    (+ alpha)
+    ;; Two or more letters: single alphabetic chars (e.g. #\a, #\λ) fall
+    ;; through to the `character' branch preserving case; upcasing only
+    ;; applies to multi-char names (Space, Newline, ...).
+    (and alpha (+ alpha))
   (:lambda (chars)
     (string-upcase (esrap:text chars))))
 
@@ -198,8 +204,30 @@
 (defrule symbol-head-char
     (or alpha digit #\. #\- #\* #\+ #\! #\? #\_ #\= #\< #\> #\& #\/ #\~ #\@ #\$ #\% #\^ #\: #\# #\| #\` #\,))
 
+;;; Symbol constituent escapes: \X is literal X, |...| quotes an
+;;; arbitrary span (spaces and parens included). Found in the wild as
+;;; '#(\a |b| |cD|)' (iterate) — previously a hard parse ERROR since "\"
+;;; matched nothing at all.
+(defrule symbol-escape
+    (and #\\ character)
+  (:lambda (pair)
+    (esrap:text pair)))
+
+(defrule bar-inner-char
+    (or symbol-escape (and (! #\|) character))
+  (:lambda (x)
+    (if (stringp x) x (string (second x)))))
+
+(defrule bar-segment
+    (and #\| (* bar-inner-char) #\|)
+  (:lambda (parts)
+    (esrap:text parts)))
+
 (defrule symbol-tail-char
-    (or symbol-head-char #\. #\[ #\]))
+    (or symbol-escape bar-segment symbol-head-char #\. #\[ #\]))
+
+(defrule symbol-head
+    (or symbol-escape bar-segment symbol-head-char))
 
 (defrule symbol-body
     (+ symbol-tail-char)
@@ -207,7 +235,7 @@
     (esrap:text chars)))
 
 (defrule symbol
-    (and symbol-head-char (* symbol-tail-char))
+    (and symbol-head (* symbol-tail-char))
   (:lambda (chars &bounds start end)
     (let ((full (esrap:text chars)))
       ;; Split on the LAST colon so "foo::bar" yields package "foo",
@@ -278,12 +306,111 @@
                                form)
                :start start :end end)))
 
+;;; Backquote / comma reader macros. Previously "`" and "," were symbol
+;;; chars, so "`(a ,b)" parsed as TWO forms (stray "`" symbol + list).
+;;; Ubiquitous in real code (26+ files in a 6-lib sample).
+(defrule backquote-form
+    (and #\` ws form)
+  (:destructure (bq ws form &bounds start end)
+    (declare (ignore bq ws))
+    (make-node :list
+               :children (list (make-node :symbol :name "BACKQUOTE"
+                                          :start start :end (+ start 1))
+                               form)
+               :start start :end end)))
+
+(defrule comma-form
+    (and #\, (? #\@) ws form)
+  (:destructure (comma at ws form &bounds start end)
+    (declare (ignore comma ws))
+    (make-node :list
+               :children (list (make-node :symbol
+                                          :name (if at "UNQUOTE-SPLICING" "UNQUOTE")
+                                          :start start :end (+ start (if at 2 1)))
+                               form)
+               :start start :end end)))
+
+;;; Feature conditionals #+ / #-. Previously parsed as a stray symbol
+;;; ("#+sbcl") plus the guarded form — two top-level forms instead of
+;;; one. Wrapped so the file's top-level shape stays accurate.
+(defrule feature-form
+    (and (or "#+" "#-") ws form ws form)
+  (:destructure (marker ws1 feat ws2 target &bounds start end)
+    (declare (ignore ws1 ws2))
+    (make-node :list
+               :children (list (make-node :symbol :name marker
+                                          :start start :end (+ start 2))
+                               feat target)
+               :start start :end end)))
+
+;;; Structure / complex / pathname / array / bit-vector literals.
+;;; Previously split into a stray symbol ("#S") plus payload — again two
+;;; forms instead of one. Case-insensitive dispatch per the CL reader.
+(defrule struct-form
+    (and (or "#S" "#s") ws form)
+  (:destructure (marker ws payload &bounds start end)
+    (declare (ignore marker ws))
+    (make-node :list
+               :children (list (make-node :symbol :name "STRUCT"
+                                          :start start :end (+ start 2))
+                               payload)
+               :start start :end end)))
+
+(defrule complex-form
+    (and (or "#C" "#c") ws form)
+  (:destructure (marker ws payload &bounds start end)
+    (declare (ignore marker ws))
+    (make-node :list
+               :children (list (make-node :symbol :name "COMPLEX"
+                                          :start start :end (+ start 2))
+                               payload)
+               :start start :end end)))
+
+(defrule pathname-form
+    (and (or "#P" "#p") ws form)
+  (:destructure (marker ws payload &bounds start end)
+    (declare (ignore marker ws))
+    (make-node :list
+               :children (list (make-node :symbol :name "PATHNAME"
+                                          :start start :end (+ start 2))
+                               payload)
+               :start start :end end)))
+
+(defrule array-form
+    (and "#" (* digit) (or "A" "a") ws form)
+  (:destructure (hash rank letter ws payload &bounds start end)
+    (declare (ignore hash ws))
+    (make-node :list
+               :children (list (make-node :symbol :name "ARRAY"
+                                          :start start
+                                          :end (+ start 2 (length rank)))
+                               payload)
+               :start start :end end)))
+
+(defrule bit-char
+    (or #\0 #\1))
+
+(defrule bitvector-form
+    (and "#*" (* bit-char))
+  (:destructure (marker bits &bounds start end)
+    (declare (ignore marker))
+    (make-node :list
+               :children (list (make-node :symbol :name "BIT-VECTOR"
+                                          :start start :end (+ start 2))
+                               (make-node :symbol
+                                          :name (esrap:text bits)
+                                          :start (+ start 2) :end end))
+               :start start :end end)))
+
 ;;; Top-level form
 ;;; NOTE: sharp-dispatch ("#" + vector-form) required "##(" and never
 ;;; matched — vector-form already covers "#(...)". Removed from the
 ;;; choice to avoid dead-branch confusion.
 (defrule form
-    (or comment list-form vector-form quote-form sharp-quote sharp-dot char-literal string-literal number symbol)
+    (or comment list-form vector-form quote-form sharp-quote sharp-dot
+        backquote-form comma-form feature-form array-form struct-form
+        complex-form pathname-form bitvector-form
+        char-literal string-literal number symbol)
   (:lambda (result)
     result))
 
