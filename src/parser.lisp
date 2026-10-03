@@ -1204,19 +1204,28 @@
 
 (defun apply-batch-edits (text edits &key recovery)
   "Apply a list of EDIT plists to TEXT.
-   Order: name-based edits first (self-describing), then index-based
-   edits from highest to lowest (prevents index shifting), then
-   position-based edits. Returns the final modified text."
+    Order: name-based edits first (self-describing), then index-based
+    edits from highest to lowest (prevents index shifting), then
+    position-based edits. Returns the final modified text. A failing
+    edit is re-signalled with its 1-based position and operation, so
+    agents debugging a batch know exactly which step broke."
   (let* ((name-edits (remove-if-not (lambda (e) (getf e :name)) edits))
          (index-edits (remove-if (lambda (e) (getf e :name)) edits))
          (with-index (remove-if-not (lambda (e) (getf e :index)) index-edits))
          (position-edits (remove-if (lambda (e) (getf e :index)) index-edits))
          (sorted-index (sort (copy-list with-index)
-                             (lambda (a b) (> (getf a :index) (getf b :index))))))
-    (reduce (lambda (current-text edit)
-              (apply-single-edit current-text edit :recovery recovery))
-            (append name-edits sorted-index position-edits)
-            :initial-value text)))
+                             (lambda (a b) (> (getf a :index) (getf b :index)))))
+         (ordered (append name-edits sorted-index position-edits))
+         (current-text text))
+    (loop for edit in ordered
+          for i from 1
+          do (setf current-text
+                   (handler-case
+                       (apply-single-edit current-text edit :recovery recovery)
+                     (error (c)
+                       (error "Batch edit ~a (~a) failed: ~a"
+                              i (getf edit :operation) c)))))
+    current-text))
 
 (defun insert-form-at (text line col new-code &key recovery)
   "Insert NEW-CODE before the form at LINE, COL (0-indexed) in TEXT.

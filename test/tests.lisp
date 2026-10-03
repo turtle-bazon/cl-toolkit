@@ -1221,6 +1221,20 @@
     (is (null (find-top-level-by-name r "a")))
     (is (not (null (find-top-level-by-name r "b2"))))))
 
+(test batch-error-names-failing-edit
+  ;; the failure names its 1-based position and operation
+  (handler-case
+      (progn
+        (apply-batch-edits
+         "(defun a () 1)"
+         (list (list :operation :replace-name :name "a" :code "(defun b () 1)")
+               (list :operation :delete-name :name "missing")))
+        (is nil "batch should have signalled"))
+    (error (c)
+      (let ((msg (princ-to-string c)))
+        (is (search "Batch edit 2" msg))
+        (is (search "DELETE-NAME" msg))))))
+
 (test batch-match-with-selectors
   (let ((text "(defun d () (v 1) (v 2))"))
     (is (search "(w 1)" (apply-batch-edits text (list (list :operation :replace-match :match "(v 1)" :code "(w 1)")))))
