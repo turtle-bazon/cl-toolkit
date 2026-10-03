@@ -919,6 +919,143 @@
       (is (string= single batched))
       (is (edit-source-valid-p batched)))))
 
+;;; --- Machine-output hygiene ---
+;;;;
+;;; Scripts parse this JSON, so the shape of a node and of a lint
+;;; diagnostic is a contract: the documented keys with the documented
+;;; types, bounds inside the file, leaves without children. The output
+;;; must also be byte-identical across runs -- nothing may depend on
+;;; hash order or on a clock -- and a command must finish in bounded
+;;; time. Verified over the whole corpus; pinned here over the node kinds
+;;; most likely to drift.
+
+(defun alist-get (alist key)
+  (cdr (assoc key alist :test #'eq)))
+
+(defparameter *schema-samples*
+  (list "(defun f (x) \"doc\" (+ x 1))"
+        "(a . b)"
+        "(a . (b c))"
+        "#()"
+        "#(1 2)"
+        "#*101"
+        "()"
+        "'x"
+        "`(a ,b)"
+        "#+sbcl 1 #-none 2"
+        "0"
+        "-3/4"
+        "#xFF"
+        "|odd sym|"
+        ":pkg:name"
+        "(list (vector #(+ 1 2)) #*1010)"
+        ";; only a comment"
+        ""))
+
+(defun top-level-schema-problems (alist text)
+  "Schema checks that need no recursion: every top-level node carries the
+   documented keys with the documented types and bounds inside the file."
+  (let ((out nil)
+        (type (alist-get alist :type))
+        (start (alist-get alist :start))
+        (end (alist-get alist :end)))
+    (unless (and (stringp type) (> (length type) 0))
+      (push "type must be a non-empty string" out))
+    (unless (integerp start) (push "start must be an integer" out))
+    (unless (integerp end) (push "end must be an integer" out))
+    (when (and (integerp start) (integerp end))
+      (when (> start end) (push "start after end" out))
+      (when (> end (length text)) (push "end past the source" out))
+      (when (< start 0) (push "negative start" out)))
+    (dolist (key '(:name :package :source))
+      (let ((v (alist-get alist key)))
+        (when (and v (not (stringp v)))
+          (push (format nil "~a must be a string" key) out))))
+    (let ((v (alist-get alist :value)))
+      (when (and v (not (or (stringp v) (numberp v))))
+        (push "value must be a string or a number" out)))
+    (nreverse out)))
+
+(test parse-node-schema-holds
+  (dolist (text *schema-samples*)
+    (let ((ast (parse-lisp-source text)))
+      (unless (eq (node-type ast) :error)
+        (let ((problems (top-level-schema-problems (node-to-alist ast) text)))
+          (is (null problems)
+              (format nil "schema problems in ~s: ~s" text problems)))))))
+
+(test leaf-nodes-have-no-children
+  (dolist (text *schema-samples*)
+    (let ((ast (parse-lisp-source text)))
+      (unless (eq (node-type ast) :error)
+        (labels ((walk (n)
+                   (when (member (node-type n) '(:symbol :number :string :char))
+                     (is (null (node-children n))
+                         (format nil "leaf ~s in ~s has children" (node-type n) text)))
+                   (dolist (k (node-children n)) (walk k))))
+          (walk ast))))))
+
+(test lint-diagnostic-schema-holds
+  (dolist (text *schema-samples*)
+    (let ((result (lint-source text)))
+      (is (or (eql (getf result :ok) t) (null (getf result :ok)))
+          ":ok must be a boolean")
+      (is (listp (getf result :diagnostics)))
+      (dolist (d (getf result :diagnostics))
+        (is (stringp (getf d :rule)))
+        (is (stringp (getf d :message)))
+        (is (member (getf d :severity) '(:error :warning :portability :style :info)))
+        (dolist (key '(:line :col :start :end))
+          (is (integerp (getf d key))
+              (format nil "~a must be an integer in ~s" key d)))
+        (let ((fix (getf d :fix)))
+          (is (or (null fix) (stringp fix)
+                  (and (consp fix)
+                       (every (lambda (kv) (and (consp kv) (stringp (cdr kv)))) fix))))))))
+
+(test lint-json-is-stable-across-runs
+  (dolist (text *schema-samples*)
+    (let* ((result (lint-source text))
+           (a (lint-diagnostics-json result))
+           (b (lint-diagnostics-json (lint-source text))))
+      (is (string= a b)
+          (format nil "lint JSON differed between runs for ~s" text)))))
+
+(test parse-json-is-stable-across-runs
+  (dolist (text *schema-samples*)
+    (let* ((ast (parse-lisp-source text))
+           (a (node-to-json-string ast))
+           (b (node-to-json-string (parse-lisp-source text))))
+      (is (string= a b)
+          (format nil "parse JSON differed between runs for ~s" text)))))
+
+(defun j (text)
+  "TEXT wrapped in double quotes, the way the JSON encoder writes it."
+  (format nil "~a~a~a" (code-char 34) text (code-char 34)))
+
+(test lint-json-is-parseable-machine-output
+  (let ((json (lint-diagnostics-json
+               (lint-source "(defun f () (eval (read-from-string "
+                            (j "x") ")))"))))
+    (is (search (j "ok:") json))
+    (is (search (j "diagnostics":[) json))
+    (is (search (format nil "~a:~a~a" (j "rule") (j "eval-hazard")) json))
+    (is (search (format nil "~a:~a~a" (j "severity") (j "warning")) json))
+    (is (search (format nil "~a:~a~a" (j "line") 12) json))))
+
+(test pathological-inputs-are-bounded
+  ;; deeply nested and unterminated input must not hang or blow the stack
+  (dolist (text (list (format nil "~{~a~}" (make-list 2000 :initial-element "("))
+                      (format nil "~a~a" (make-string 5000 :initial-element #\() ")")
+                      (format nil "~a~a" (make-string 500 :initial-element #\() ")")
+                      (concatenate 'string (make-list 300 :initial-element "#(")))))
+    (let ((start (get-internal-real-time)))
+      (handler-case (parse-lisp-source text) (error () nil))
+      (let ((elapsed (/ (- (get-internal-real-time) start)
+                        internal-time-units-per-second)))
+        (is (< elapsed 5)
+            (format nil "parsing ~a characters took ~as" (length text) elapsed))))))
+
 (test empty-bit-vector-has-no-zero-width-child
   (let* ((ast (parse-lisp-source "#*"))
          (node (first (node-children ast)))

@@ -24,6 +24,7 @@
    #:check-source-spans
    #:node-to-json
    #:node-to-json-string
+   #:node-to-alist
    #:escape-json-string))
 
 (defpackage #:cl-toolkit-grammar
