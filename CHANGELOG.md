@@ -5,6 +5,32 @@ marked `BREAKING:`.
 
 ## [Unreleased]
 
+### Verification
+
+The properties below now hold across the 5079-file corpus and are
+pinned by the test suite, so a later change cannot quietly break them.
+
+- **Span invariants** (`check-node-spans`, `check-source-spans`): every
+  node's `[start, end)` is a real range inside its parent, siblings are
+  in source order, and a leaf that consumed something reads back as the
+  token it parsed. 0 violations over the corpus.
+- **Formatter round trip**: for both the minimal and the canonical
+  formatter, the output parses, parses to the same structure, and is a
+  fixed point. 0 violations over 4985 files.
+- **Edit operations**: replacing a form with its own source text is a
+  no-op, the same edit twice gives the same bytes, a successful edit
+  leaves text that still parses, inserting cannot shorten a file and
+  deleting cannot lengthen one, an out-of-range target is refused, and a
+  batch equals its parts applied one at a time. 0 violations over
+  48011 edits.
+- **Fuzzing**: 100000 generated inputs (random token soup, random
+  well-formed forms) produce no crash, no span violation, no
+  nondeterminism and no format round-trip failure.
+- **Machine output**: the parse node and lint diagnostic shapes are
+  checked against the documented keys and types, rendering is
+  byte-identical across runs, and deeply nested or unterminated input
+  finishes in bounded time.
+
 ### Fixed
 
 - **Numbers follow the reader.** Only the `e` exponent marker was
@@ -52,6 +78,12 @@ marked `BREAKING:`.
   is read by SBCL as if the vanished branch contents were spliced into
   the enclosing list. cl-toolkit rejects it, which is what the
   standard's grammar for `.` requires. Two corpus files rely on it.
+- An out-of-range numeric literal (`1e542`, `1e400`, `1d400`) is
+  reported as a parse error rather than raising
+  `FLOATING-POINT-OVERFLOW` out of the parser. The reader rejects these
+  literals outright, so the file is unreadable either way. `1e308` is
+  rejected while `1d308` parses, because `e` selects the default single
+  format and `d` selects double.
 - Rejecting an invalid file can take far longer than accepting it,
   because a list that fails to parse is re-read by the dotted-list
   rule before the failure is reported. The largest case measured,
