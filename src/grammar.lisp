@@ -740,7 +740,12 @@
                  :start start :end end))))
 
 (defrule list-form
-    (or dotted-list-form proper-list-form))
+    ;; proper-list-form first on purpose: the dotted rule consumes a
+    ;; whole list before failing on the missing dot, so trying it first
+    ;; makes every list in the file parse twice (and nested lists then
+    ;; cost 2^depth). A dotted list pays one extra parse; a proper list,
+    ;; which is nearly all of them, pays nothing.
+    (or proper-list-form dotted-list-form))
 
 ;;; Vector. Elements can never be a lone dot: the reader rejects
 ;;; #(a . b), so the repetition excludes it the same way proper lists do.
