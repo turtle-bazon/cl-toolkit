@@ -111,5 +111,13 @@
    #:apply-batch-edits
    #:apply-single-edit
    #:apply-edit
+   #:definition-name-node
+   #:validate-new-name
+   #:rename-node-in-text
+   #:wrap-node-in-text
+   #:unwrap-node-in-text
+   #:edit-rename-name
+   #:edit-wrap-name
+   #:edit-unwrap-name
    #:cl-toolkit-main
    #:main))

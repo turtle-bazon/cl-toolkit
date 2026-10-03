@@ -941,6 +941,238 @@
     :handler #'delete/handler))
 
 ;;; ============================================================
+;;; Shared form targeting for rename/wrap/unwrap
+;;; ============================================================
+
+(defun resolve-form-target (text &key name index line col recovery)
+  "Resolve one target form by --name, --index, or --line/--col, in
+   that precedence. Position targeting finds the smallest containing
+   form, so renames and wraps stay surgical. Signals on no match."
+  (cond (name
+         (or (find-top-level-by-name text name :recovery recovery)
+             (error "No top-level form named '~a'" name)))
+        ((not (null index))
+         (top-level-node-at text index :recovery recovery))
+        ((and line col)
+         (let ((node (find-form-at (parse-for-edit text recovery)
+                                   text line col)))
+           (unless node
+             (error "No form found at line ~a, col ~a" line col))
+           node))
+        (t (error "--name, --index, or --line/--col required"))))
+
+(defun rename/handler (cmd)
+  (with-edit-context (cmd)
+    (let ((to (clingon:getopt cmd :to)))
+      (unless to
+        (format *error-output* "Error: --to is required~%")
+        (clingon:exit 1))
+      (handler-case
+          (let* ((node (resolve-form-target
+                        text :name name :index index
+                        :line line :col col :recovery recovery))
+                 (result (rename-node-in-text text node to)))
+            (validate-edited-source result recovery no-validate-result file)
+            (notify-target "Renaming" node text)
+            (deliver-edit-result result original-text file preview write quiet))
+        (error (c)
+          (output-edit-result nil (format nil "~a" c)))))))
+
+(defun rename/command ()
+  (clingon:make-command
+   :name "rename"
+   :usage "(-f FILE | --code CODE) (--name NAME | --index N | --line L --col C) --to NEW"
+   :description "Rename a form's definition/operator name slot"
+   :long-description "Replaces the definition name (defun foo -> defun bar) ~
+                       or the operator of a call ((foo 1) -> (bar 1)). ~
+                       References elsewhere are untouched by design: without ~
+                       scope analysis, touching them would be guessing. ~
+                       Validates result by default; use --no-validate-result to skip."
+   :options (list
+              (clingon:make-option :string :long-name "file" :short-name #\f
+                                   :description "File to edit" :key :file)
+              (clingon:make-option :string :long-name "code"
+                                   :description "Inline code" :key :code)
+              (clingon:make-option :integer :long-name "line" :short-name #\l
+                                   :description "Line number" :key :line)
+              (clingon:make-option :integer :long-name "col" :short-name #\c
+                                   :description "Column number" :key :col)
+              (clingon:make-option :integer :long-name "index"
+                                   :description "Top-level form index (0-based)" :key :index)
+              (clingon:make-option :string :long-name "name" :short-name #\n
+                                   :description "Top-level form name" :key :name)
+              (clingon:make-option :string :long-name "to"
+                                   :description "New name (must be a single symbol)" :key :to)
+              (make-write-option)
+              (clingon:make-option :string :long-name "backup-dir"
+                                   :description "Also save timestamped pre-edit snapshots here"
+                                   :key :backup-dir)
+              (clingon:make-option :flag :long-name "no-backup"
+                                   :description "Skip the rolling .bak backup on write"
+                                   :key :no-backup)
+              (clingon:make-option :flag :long-name "compile-check"
+                                   :description "After --write, compile the file and roll back to backup on error"
+                                   :key :compile-check)
+              (clingon:make-option :string :long-name "compile-check-package"
+                                   :description "Stub-create this package before the compile check (single-file checks against project packages)"
+                                   :key :compile-check-package)
+              (clingon:make-option :string :long-name "compile-check-system"
+                                   :description "asdf:load-system this system before the compile check (full fidelity)"
+                                   :key :compile-check-system)
+              (clingon:make-option :flag :long-name "load-check"
+                                   :description "With --compile-check: also LOAD the compiled fasl, catching evaluation-time errors (top-level forms execute!)"
+                                   :key :load-check)
+              (make-preview-option)
+              (make-quiet-option)
+              (make-recovery-option)
+              (clingon:make-option :flag :long-name "no-validate-input"
+                                   :description "Skip input code validation"
+                                   :key :no-validate-input)
+              (clingon:make-option :flag :long-name "no-validate-result"
+                                   :description "Skip result validation"
+                                   :key :no-validate-result))
+   :handler #'rename/handler))
+
+(defun wrap-form/handler (cmd)
+  (with-edit-context (cmd)
+    (let ((open (clingon:getopt cmd :open))
+          (close (clingon:getopt cmd :close)))
+      (unless (and open close)
+        (format *error-output* "Error: --open and --close are required~%")
+        (clingon:exit 1))
+      (handler-case
+          (let* ((node (resolve-form-target
+                        text :name name :index index
+                        :line line :col col :recovery recovery))
+                 (result (wrap-node-in-text text node open close)))
+            (validate-edited-source result recovery no-validate-result file)
+            (notify-target "Wrapping" node text)
+            (deliver-edit-result result original-text file preview write quiet))
+        (error (c)
+          (output-edit-result nil (format nil "~a" c)))))))
+
+(defun wrap-form/command ()
+  (clingon:make-command
+   :name "wrap-form"
+   :usage "(-f FILE | --code CODE) (--name NAME | --index N | --line L --col C) --open CODE --close CODE"
+   :description "Wrap a form with opener/closer code in one atomic step"
+   :long-description "Splices --open before and --close after the target ~
+                       form's span in a single step, so the halves can never ~
+                       land without each other. An unbalanced pair fails ~
+                       loudly in result validation."
+   :options (list
+              (clingon:make-option :string :long-name "file" :short-name #\f
+                                   :description "File to edit" :key :file)
+              (clingon:make-option :string :long-name "code"
+                                   :description "Inline code" :key :code)
+              (clingon:make-option :integer :long-name "line" :short-name #\l
+                                   :description "Line number" :key :line)
+              (clingon:make-option :integer :long-name "col" :short-name #\c
+                                   :description "Column number" :key :col)
+              (clingon:make-option :integer :long-name "index"
+                                   :description "Top-level form index (0-based)" :key :index)
+              (clingon:make-option :string :long-name "name" :short-name #\n
+                                   :description "Top-level form name" :key :name)
+              (clingon:make-option :string :long-name "open"
+                                   :description "Code spliced before the form" :key :open)
+              (clingon:make-option :string :long-name "close"
+                                   :description "Code spliced after the form" :key :close)
+              (make-write-option)
+              (clingon:make-option :string :long-name "backup-dir"
+                                   :description "Also save timestamped pre-edit snapshots here"
+                                   :key :backup-dir)
+              (clingon:make-option :flag :long-name "no-backup"
+                                   :description "Skip the rolling .bak backup on write"
+                                   :key :no-backup)
+              (clingon:make-option :flag :long-name "compile-check"
+                                   :description "After --write, compile the file and roll back to backup on error"
+                                   :key :compile-check)
+              (clingon:make-option :string :long-name "compile-check-package"
+                                   :description "Stub-create this package before the compile check (single-file checks against project packages)"
+                                   :key :compile-check-package)
+              (clingon:make-option :string :long-name "compile-check-system"
+                                   :description "asdf:load-system this system before the compile check (full fidelity)"
+                                   :key :compile-check-system)
+              (clingon:make-option :flag :long-name "load-check"
+                                   :description "With --compile-check: also LOAD the compiled fasl, catching evaluation-time errors (top-level forms execute!)"
+                                   :key :load-check)
+              (make-preview-option)
+              (make-quiet-option)
+              (make-recovery-option)
+              (clingon:make-option :flag :long-name "no-validate-input"
+                                   :description "Skip input code validation"
+                                   :key :no-validate-input)
+              (clingon:make-option :flag :long-name "no-validate-result"
+                                   :description "Skip result validation"
+                                   :key :no-validate-result))
+   :handler #'wrap-form/handler))
+
+(defun unwrap-form/handler (cmd)
+  (with-edit-context (cmd)
+    (handler-case
+        (let* ((node (resolve-form-target
+                      text :name name :index index
+                      :line line :col col :recovery recovery))
+               (result (unwrap-node-in-text text node)))
+          (validate-edited-source result recovery no-validate-result file)
+          (notify-target "Unwrapping" node text)
+          (deliver-edit-result result original-text file preview write quiet))
+      (error (c)
+        (output-edit-result nil (format nil "~a" c))))))
+
+(defun unwrap-form/command ()
+  (clingon:make-command
+   :name "unwrap-form"
+   :usage "(-f FILE | --code CODE) (--name NAME | --index N | --line L --col C)"
+   :description "Replace a single-child list with its child"
+   :long-description "Replaces the target list with its only child. ~
+                       Multi-child lists refuse (that would silently change ~
+                       arity); empty lists have nothing to give. Use ~
+                       replace-form for those."
+   :options (list
+              (clingon:make-option :string :long-name "file" :short-name #\f
+                                   :description "File to edit" :key :file)
+              (clingon:make-option :string :long-name "code"
+                                   :description "Inline code" :key :code)
+              (clingon:make-option :integer :long-name "line" :short-name #\l
+                                   :description "Line number" :key :line)
+              (clingon:make-option :integer :long-name "col" :short-name #\c
+                                   :description "Column number" :key :col)
+              (clingon:make-option :integer :long-name "index"
+                                   :description "Top-level form index (0-based)" :key :index)
+              (clingon:make-option :string :long-name "name" :short-name #\n
+                                   :description "Top-level form name" :key :name)
+              (make-write-option)
+              (clingon:make-option :string :long-name "backup-dir"
+                                   :description "Also save timestamped pre-edit snapshots here"
+                                   :key :backup-dir)
+              (clingon:make-option :flag :long-name "no-backup"
+                                   :description "Skip the rolling .bak backup on write"
+                                   :key :no-backup)
+              (clingon:make-option :flag :long-name "compile-check"
+                                   :description "After --write, compile the file and roll back to backup on error"
+                                   :key :compile-check)
+              (clingon:make-option :string :long-name "compile-check-package"
+                                   :description "Stub-create this package before the compile check (single-file checks against project packages)"
+                                   :key :compile-check-package)
+              (clingon:make-option :string :long-name "compile-check-system"
+                                   :description "asdf:load-system this system before the compile check (full fidelity)"
+                                   :key :compile-check-system)
+              (clingon:make-option :flag :long-name "load-check"
+                                   :description "With --compile-check: also LOAD the compiled fasl, catching evaluation-time errors (top-level forms execute!)"
+                                   :key :load-check)
+              (make-preview-option)
+              (make-quiet-option)
+              (make-recovery-option)
+              (clingon:make-option :flag :long-name "no-validate-input"
+                                   :description "Skip input code validation"
+                                   :key :no-validate-input)
+              (clingon:make-option :flag :long-name "no-validate-result"
+                                   :description "Skip result validation"
+                                   :key :no-validate-result))
+   :handler #'unwrap-form/handler))
+
+;;; ============================================================
 ;;; Insert-at Command (simple text insertion at position)
 ;;; ============================================================
 
@@ -1623,6 +1855,9 @@
                                             (list :operation (intern (string-upcase op-str) :keyword)
                                                   :code (getk :code)
                                                   :name (getk :name)
+                                                  :to (getk :to)
+                                                  :open (getk :open)
+                                                  :close (getk :close)
                                                   :match (getk :match)
                                                   :match-exact (getk :match-exact)
                                                   :first (getk :first)
@@ -2629,8 +2864,11 @@
                    (delete-form/command)
                    (insert-form/command)
                    (append-form/command)
-                    (replace-form/command)
-                    (batch-replace/command)
+                     (replace-form/command)
+                     (rename/command)
+                     (wrap-form/command)
+                     (unwrap-form/command)
+                     (batch-replace/command)
                     (insert-at/command)
                     (split-forms/command)
                     (move-form/command)

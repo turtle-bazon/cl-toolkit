@@ -139,6 +139,14 @@ mk redef.lisp '(defun f () 1)
 check lint-redefined 0 sh -c "$BIN lint -f '$TMP/redef.lisp' --format json --rules redefined-top-level | grep -q redefined-top-level"
 check lint-empty-operator 0 sh -c "$BIN lint --code '(f (() ))' --format json --rules empty-operator | grep -q empty-operator"
 check lint-eval-hazard 0 sh -c "$BIN lint --code '(eval x)' --format json --rules eval-hazard | grep -q eval-hazard"
+check rename-def 0 sh -c "cp '$TMP/base.lisp' '$TMP/rn.lisp' && $BIN rename -f '$TMP/rn.lisp' --name alpha --to zeta --write --quiet && grep -q '(defun zeta' '$TMP/rn.lisp'"
+check rename-missing 1 "$BIN" rename -f "$TMP/base.lisp" --name nope --to zeta --write --quiet
+check rename-bad-name 1 "$BIN" rename -f "$TMP/base.lisp" --name alpha --to '(x)' --write --quiet
+check wrap-form 0 sh -c "cp '$TMP/base.lisp' '$TMP/wr.lisp' && $BIN wrap-form -f '$TMP/wr.lisp' --name alpha --open '(progn ' --close ')' --write --quiet && grep -q '(progn (defun alpha' '$TMP/wr.lisp'"
+check wrap-unbalanced 1 sh -c "cp '$TMP/base.lisp' '$TMP/wu.lisp' && $BIN wrap-form -f '$TMP/wu.lisp' --name alpha --open '(progn ' --close '((' --write --quiet"
+check unwrap-form 0 sh -c "printf '((defun solo () 1))\n' > '$TMP/uw.lisp' && $BIN unwrap-form -f '$TMP/uw.lisp' --name solo --write --quiet && grep -q '(defun solo' '$TMP/uw.lisp'"
+check unwrap-multi-refuses 1 sh -c "printf '(progn (a) (b))\n' > '$TMP/um.lisp' && $BIN unwrap-form -f '$TMP/um.lisp' --index 0 --write --quiet"
+check batch-rename-wrap 0 sh -c "cp '$TMP/base.lisp' '$TMP/brw.lisp' && $BIN batch-replace -f '$TMP/brw.lisp' --edits '[{\"operation\":\"rename-name\",\"name\":\"alpha\",\"to\":\"zeta\"},{\"operation\":\"wrap-name\",\"name\":\"beta\",\"open\":\"(progn \",\"close\":\")\"}]' --write --quiet && grep -q '(defun zeta' '$TMP/brw.lisp' && grep -q '(progn (defun beta' '$TMP/brw.lisp'"
 check lint-sharp-underscore 0 sh -c "$BIN lint --code '(list 1 #_2 3)' --format json --rules sharp-underscore-dispatch | grep -q sharp-underscore-dispatch"
 check lint-skipped-branch 0 sh -c "$BIN lint --code '(list #-other-lisp #\Name-Only)' --format json --rules skipped-conditional-branch | grep -q skipped-conditional-branch"
 check diff-same 0 "$BIN" diff-forms -f "$TMP/base.lisp" --name alpha

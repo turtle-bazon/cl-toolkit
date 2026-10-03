@@ -1074,6 +1074,8 @@
   (is (string= "s" (node-form-name (first-form-of "s"))))
   (is (string= "7" (node-form-name (first-form-of "7"))))
   (is (string= "\"hi\"" (node-form-name (first-form-of "\"hi\""))))
+  ;; a wrapper list names what it wraps, so --name reaches through
+  (is (string= "a" (node-form-name (first-form-of "((defun a () 1))"))))
   (is (= 2 (node-form-count (parse-lisp-source "(a) (b)"))))
   (is (= 1 (node-form-count (first-form-of "(a)")))))
 
@@ -1224,6 +1226,72 @@
     (is (search "(w 1)" (apply-batch-edits text (list (list :operation :replace-match :match "(v 1)" :code "(w 1)")))))
     (is (search "(w 2)" (apply-batch-edits text (list (list :operation :replace-match :match "(v 1)" :code "(w 2)" :first t :allow-fuzzy t)))))
     (is (search "(w 2)" (apply-batch-edits text (list (list :operation :replace-match :match "(v" :code "(w 2)" :occurrence 2 :allow-fuzzy t)))))))
+
+(test rename-wrap-unwrap-spans
+  ;; rename a definition slot
+  (is (search "(defun bar () 1)"
+             (rename-node-in-text
+              "(defun foo () 1)"
+              (find-top-level-by-name "(defun foo () 1)" "foo")
+              "bar")))
+  ;; rename a call operator
+  (is (search "(bar 1)"
+             (rename-node-in-text
+              "(foo 1)"
+              (find-top-level-by-name "(foo 1)" "foo")
+              "bar")))
+  ;; references elsewhere are untouched
+  (is (search "(foo 2)"
+             (rename-node-in-text
+              "(defun foo () 1) (foo 2)"
+              (find-top-level-by-name "(defun foo () 1) (foo 2)" "foo")
+              "bar")))
+  ;; a bad new name refuses loudly
+  (is (null (ignore-errors
+              (rename-node-in-text "(foo 1)"
+                                   (find-top-level-by-name "(foo 1)" "foo")
+                                   "(bar"))))
+  ;; wrap is one atomic splice
+  (is (search "(progn (foo 1))"
+             (wrap-node-in-text
+              "(foo 1)"
+              (find-top-level-by-name "(foo 1)" "foo")
+              "(progn " ")")))
+  ;; unwrap a single child
+  (is (search "(foo 1)"
+             (unwrap-node-in-text
+              "((foo 1))"
+              (first (list-top-level (parse-lisp-source "((foo 1))"))))))
+  ;; multi-child and empty unwraps refuse
+  (is (null (ignore-errors
+              (unwrap-node-in-text
+               "(a b)"
+               (first (list-top-level (parse-lisp-source "(a b)")))))))
+  (is (null (ignore-errors
+              (unwrap-node-in-text
+               "()"
+               (first (list-top-level (parse-lisp-source "()"))))))))
+
+(test rename-wrap-unwrap-batch-ops
+  (let ((text "(defun a () 1)"))
+    (is (search "(defun b () 1)"
+                (apply-single-edit text (list :operation :rename-name
+                                              :name "a" :to "b"))))
+    (is (search "(progn (defun a () 1))"
+                (apply-single-edit text (list :operation :wrap-name
+                                              :name "a"
+                                              :open "(progn " :close ")"))))
+    (is (search "(defun a () 1)"
+                (apply-single-edit "((defun a () 1))"
+                                   (list :operation :unwrap-name
+                                         :name "a")))))
+  (is (null (ignore-errors
+              (apply-single-edit "(defun a () 1)"
+                                 (list :operation :rename-name :name "a")))))
+  (is (null (ignore-errors
+              (apply-single-edit "(defun a () 1)"
+                                 (list :operation :wrap-name :name "a"
+                                       :open "(progn "))))))
 
 (test subform-global-policies
   (is (null (ignore-errors (cl-toolkit::find-subform-globally "(defun d () (v s) (v s))" "(v s)"))))

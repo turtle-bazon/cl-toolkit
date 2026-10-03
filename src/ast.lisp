@@ -50,31 +50,33 @@
    For atoms, returns the symbol name or value."
   (cond
     ((not (nodep node)) nil)
-    ((node-list-p node)
-     (let ((children (node-children node)))
-       (when (and children (nodep (first children)))
-         (let ((form-type (node-name (first children))))
-           (when form-type
-             (cond
-               ;; For defun/defvar/defmacro/defgeneric/defclass etc,
-               ;; return the second child (the name being defined)
-               ((and (> (length children) 1)
-                     (nodep (second children))
-                     (member form-type '("defun" "defvar" "defparameter" "defmacro"
-                                         "defgeneric" "defclass" "defstruct"
-                                         "deftype" "defmethod"
-                                         "define-compiler-macro" "defsetf"
-                                         "define-setf-expander" "defpackage"
-                                         ;; fiveam-style: (test NAME body...)
-                                         "test")
-                             :test #'string-equal))
-                (node-name (second children)))
-               ;; For other forms, return the first symbol
-               ((eq (node-type (first children)) :symbol)
-                (node-name (first children)))
-               ((node-list-p (first children))
-                (node-form-name (first children)))
-               (t nil)))))))
+     ((node-list-p node)
+      (let ((children (node-children node)))
+        (when (and children (nodep (first children)))
+          (let ((form-type (node-name (first children))))
+            (cond
+              ;; For defun/defvar/defmacro/defgeneric/defclass etc,
+              ;; return the second child (the name being defined)
+              ((and form-type
+                    (> (length children) 1)
+                    (nodep (second children))
+                    (member form-type '("defun" "defvar" "defparameter" "defmacro"
+                                        "defgeneric" "defclass" "defstruct"
+                                        "deftype" "defmethod"
+                                        "define-compiler-macro" "defsetf"
+                                        "define-setf-expander" "defpackage"
+                                        ;; fiveam-style: (test NAME body...)
+                                        "test")
+                            :test #'string-equal))
+               (node-name (second children)))
+              ;; For other forms, return the first symbol
+              ((and form-type (eq (node-type (first children)) :symbol))
+               (node-name (first children)))
+              ;; A wrapper list ((defun a ...)) names what it wraps, so
+              ;; --name selection reaches through one level of wrapping
+              ((node-list-p (first children))
+               (node-form-name (first children)))
+              (t nil))))))
     ((eq (node-type node) :symbol) (node-name node))
     ((eq (node-type node) :number) (format nil "~a" (node-value node)))
     ((eq (node-type node) :string) (format nil "~s" (node-value node)))

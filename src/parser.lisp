@@ -1066,14 +1066,134 @@
              (getf edit :match)))
     (delete-node-from-text text node)))
 
+(defparameter *definition-heads*
+  '("defun" "defvar" "defparameter" "defmacro" "defgeneric" "defclass"
+    "defstruct" "deftype" "define-compiler-macro" "defsetf"
+    "define-setf-expander" "defpackage" "defmethod" "test")
+  "Heads whose second child names the thing being defined. Unlike
+   *lint-defining-heads*, DEFMETHOD is included: renaming a method's
+   name slot is legitimate (overloading is about specializers, and the
+   name itself is still one slot).")
+
+(defun definition-name-node (node)
+  "The child of NODE holding its defined name: the second child for
+   defining heads (defun foo, defmethod bar, ...), the operator for
+   other calls ((foo 1) renames foo), or NODE itself when a symbol.
+   Returns NIL when there is no single name slot."
+  (cond ((not (nodep node)) nil)
+        ((eq (node-type node) :symbol) node)
+        ((node-list-p node)
+         (let ((children (node-children node)))
+           (cond ((and (>= (length children) 2)
+                       (nodep (first children))
+                       (nodep (second children))
+                       (eq (node-type (first children)) :symbol)
+                       (eq (node-type (second children)) :symbol)
+                       (member (node-name (first children))
+                               *definition-heads*
+                               :test #'string-equal))
+                  (second children))
+                 ((and children
+                       (nodep (first children))
+                       (eq (node-type (first children)) :symbol))
+                  (first children))
+                 (t nil))))
+        (t nil)))
+
+(defun validate-new-name (name)
+  "Signal unless NAME parses as exactly one symbol. Returns NAME."
+  (unless (and (stringp name) (> (length name) 0))
+    (error "New name must be a non-empty string, not ~s" name))
+  (let* ((ast (cl-toolkit-grammar::parse-lisp-source name))
+         (forms (list-top-level ast)))
+    (unless (and (= (length forms) 1)
+                 (eq (node-type (first forms)) :symbol))
+      (error "New name must be a single symbol, not ~s" name)))
+  name)
+
+(defun rename-node-in-text (text node new-name)
+  "Replace NODE's definition/operator name slot with NEW-NAME.
+   References elsewhere are untouched by design: without scope
+   analysis, touching them would be guessing."
+  (validate-new-name new-name)
+  (let ((slot (definition-name-node node)))
+    (unless (and slot (node-start slot) (node-end slot))
+      (error "Form has no single name slot to rename"))
+    (concatenate 'string
+                 (subseq text 0 (node-start slot))
+                 new-name
+                 (subseq text (node-end slot)))))
+
+(defun edit-rename-name (text edit &optional recovery)
+  "Apply a :rename-name EDIT to TEXT (:name selects, :to renames)."
+  (rename-node-in-text
+   text (top-level-node-by-name text edit recovery)
+   (or (getf edit :to)
+       (error "Rename needs :to (the new name)"))))
+
+(defun wrap-node-in-text (text node open close)
+  "Splice OPEN before and CLOSE after NODE's span, in one step so the
+   two halves can never land without each other. Callers validate the
+   result as usual; an unbalanced pair fails loudly there."
+  (unless (and (node-start node) (node-end node))
+    (error "Node has no position information"))
+  (unless (and (stringp open) (stringp close)
+               (> (length open) 0) (> (length close) 0))
+    (error "Wrap needs non-empty :open and :close code"))
+  (concatenate 'string
+               (subseq text 0 (node-start node))
+               open
+               (subseq text (node-start node) (node-end node))
+               close
+               (subseq text (node-end node))))
+
+(defun edit-wrap-name (text edit &optional recovery)
+  "Apply a :wrap-name EDIT to TEXT (:name selects, :open/:close wrap)."
+  (wrap-node-in-text
+   text (top-level-node-by-name text edit recovery)
+   (or (getf edit :open)
+       (error "Wrap needs :open (code before the form)"))
+   (or (getf edit :close)
+       (error "Wrap needs :close (code after the form)"))))
+
+(defun unwrap-node-in-text (text node)
+  "Replace NODE with its single child. Only single-child lists
+   qualify: unwrapping (progn a b) would silently change arity, so
+   multi-child lists refuse and zero-child lists have nothing to give."
+  (unless (and (node-start node) (node-end node))
+    (error "Node has no position information"))
+  (unless (node-list-p node)
+    (error "Only a list can be unwrapped, not ~a" (node-type node)))
+  (let ((children (node-children node)))
+    (cond ((null children)
+           (error "Nothing to unwrap: the list is empty"))
+          ((> (length children) 1)
+           (error "Refusing multi-child unwrap (~a children); replace the form explicitly instead"
+                  (length children)))
+          (t (let ((child (first children)))
+               (unless (and (node-start child) (node-end child))
+                 (error "Child has no position information"))
+               (concatenate 'string
+                            (subseq text 0 (node-start node))
+                            (subseq text (node-start child) (node-end child))
+                            (subseq text (node-end node))))))))
+
+(defun edit-unwrap-name (text edit &optional recovery)
+  "Apply an :unwrap-name EDIT to TEXT (:name selects the wrapper)."
+  (unwrap-node-in-text
+   text (top-level-node-by-name text edit recovery)))
+
 (defun apply-single-edit (text edit &key recovery)
   "Apply a single EDIT plist to TEXT.
-   EDIT is a plist with :operation, :code, and either :name, :match,
-   :index, or :line/:col. Returns the modified text."
+    EDIT is a plist with :operation, :code, and either :name, :match,
+    :index, or :line/:col. Returns the modified text."
   (case (getf edit :operation)
     (:replace-name (edit-replace-name text edit recovery))
     (:delete-name (edit-delete-name text edit recovery))
     (:insert-after-name (edit-insert-after-name text edit recovery))
+    (:rename-name (edit-rename-name text edit recovery))
+    (:wrap-name (edit-wrap-name text edit recovery))
+    (:unwrap-name (edit-unwrap-name text edit recovery))
     (:replace-match (edit-replace-match text edit recovery))
     (:delete-match (edit-delete-match text edit recovery))
     (:replace-index (edit-replace-index text edit recovery))
