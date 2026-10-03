@@ -574,6 +574,13 @@
     ;; form became a second top-level form.
     (or "#+" "#-"))
 
+;;; A lone dot is not a symbol: the reader signals an error for a bare
+;;; "." at top level, and inside a list it is the pair separator, never
+;;; an element. ".b" and ".." are ordinary symbols, so only the
+;;; single-character case is excluded.
+(defrule lone-dot
+    (and #\. (! symbol-tail-char)))
+
 (defun unescape-symbol-text (text)
   "Drop the backslash of every \\x escape, which is what the reader
    does: the name of some\\!thing is \"SOME!THING\". Escapes never occur
@@ -620,7 +627,8 @@
     ;; broken "#(a . b)" degrades into a "#" symbol plus a list instead
     ;; of failing, disagreeing with the reader. And a radix prefix
     ;; always means integer-or-bust, so #xFFg cannot degrade either.
-    (and (! "#\\")
+    (and (! lone-dot)
+         (! "#\\")
          (! "#(")
          (! radix-prefix)
          (! reader-conditional-prefix)
@@ -736,6 +744,15 @@
 
 ;;; Vector. Elements can never be a lone dot: the reader rejects
 ;;; #(a . b), so the repetition excludes it the same way proper lists do.
+;;; #() is a vector with no elements. It has to be its own rule: the
+;;; general vector rule needs a first element, and without this the
+;;; literal used to fall through to a "#" symbol plus an empty list.
+(defrule empty-vector-form
+    (and "#(" ws #\))
+  (:destructure (open ws close &bounds start end)
+    (declare (ignore open ws close))
+    (make-node :vector :children nil :start start :end end)))
+
 (defrule vector-form
     (and "#(" ws (! dot-form) form (* (and ws (! dot-form) form)) ws #\))
   (:destructure (open ws1 first-guard first rest ws2 close
@@ -892,8 +909,8 @@
 ;;; matched — vector-form already covers "#(...)". Removed from the
 ;;; choice to avoid dead-branch confusion.
 (defrule form
-    (or comment list-form vector-form quote-form sharp-quote sharp-dot
-        backquote-form comma-form feature-form array-form struct-form
+    (or comment list-form empty-vector-form vector-form quote-form sharp-quote
+        sharp-dot backquote-form comma-form feature-form array-form struct-form
         complex-form pathname-form bitvector-form
         char-literal string-literal number symbol)
   (:lambda (result)

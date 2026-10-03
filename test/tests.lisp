@@ -629,6 +629,15 @@
     (is (equal '("a" "b") (mapcar #'node-name (node-children nested))))
     (is (string= "c" (node-name (third children))))))
 
+(test lone-dot-is-not-a-symbol
+  ;; the reader signals a bare "."; ".b", ".." and "a.b" stay symbols
+  (is (parse-rejects "."))
+  (is (not (parse-rejects ".b")))
+  (is (not (parse-rejects "..")))
+  (is (not (parse-rejects "a.b")))
+  (is (string= ".b" (node-name (first (top-forms-of ".b")))))
+  (is (string= ".." (node-name (first (top-forms-of ".."))))))
+
 (test malformed-dotted-forms-are-rejected
   (dolist (text '("(. b)" "(a .)" "(a . . b)" "(a . b . c)"
                   "(a b . )" "(.)"))
@@ -639,6 +648,21 @@
   (dolist (text '("#(a . b)" "#(a b . c)" "#(. b)"))
     (is (parse-rejects text)
         (format nil "~a must be rejected like the reader rejects it" text))))
+
+(test empty-vector-is-supported
+  ;; #() is a vector with no elements; it used to parse as a "#" symbol
+  ;; plus an empty list, and then to fail outright once "#(" was barred
+  ;; from the symbol rule
+  (let* ((ast (parse-lisp-source "#()"))
+         (node (first (node-children ast))))
+    (is (eq :vector (node-type node)))
+    (is (null (node-children node))))
+  (is (not (parse-rejects "(vector #() :type vector)")))
+  (let* ((nested (parse-lisp-source "#(1 #() 2)"))
+         (kids (node-children (first (node-children nested)))))
+    (is (= 3 (length kids)))
+    (is (eq :vector (node-type (second kids))))
+    (is (null (node-children (second kids))))))
 
 (test vector-open-is-never-a-symbol
   (dolist (text '("#(1 2)" "#(a)" "#(a b)"))
