@@ -1174,6 +1174,27 @@
               (make-node :error
                          :value (compact-parse-error c)
                          :start lo
+                         :end hi)))
+    ;; A numeric literal can be well formed and still have no value in
+    ;; the target float format: 1e542 overflows a single float, and the
+    ;; reader rejects it outright (READER-IMPOSSIBLE-NUMBER-ERROR).  An
+    ;; ARITHMETIC-ERROR raised inside a rule transform is not an esrap
+    ;; parse error, so it would otherwise escape the parser; the file is
+    ;; just as unreadable either way, so report it the same way.
+    (arithmetic-error (c)
+      (declare (ignore c))
+      (values nil
+              (make-node :error
+                         :value "Number has no value in this float format"
+                         :start lo
+                         :end hi)))
+    ;; Any other condition from a rule transform is still "this text is
+    ;; not something we can parse", never a reason to unwind the caller.
+    (error (c)
+      (values nil
+              (make-node :error
+                         :value (format nil "Cannot parse: ~a" c)
+                         :start lo
                          :end hi)))))
 
 (defun parse-forms-from (text lo text-end cuts)

@@ -154,6 +154,23 @@
   (is (= 0.001d0 (node-value (parse-single-number "1d-3"))))
   (is (= 1.0e10 (node-value (parse-single-number "1e10")))))
 
+(test out-of-range-numbers-are-rejected-not-signalled
+  ;; 1e542 is well formed but has no single-float value, and the reader
+  ;; rejects it (READER-IMPOSSIBLE-NUMBER-ERROR). The arithmetic error
+  ;; raised while coercing it must not escape the parser as an
+  ;; unhandled condition.
+  (dolist (text '("1e542" "1.5f342" "1e400" "1d400" "1e39" "1e308" "3.5e38"))
+    (let ((ast (parse-lisp-source text)))
+      (is (eq :error (node-type ast))
+          (format nil "~a must be reported as a parse error, not signalled" text)))
+  ;; ...while the ones that do fit still parse
+  ;; e means the default (single) format, so 1e308 has no value; the
+  ;; same magnitude with a d marker is a perfectly good double
+  (dolist (text '("1e38" "3.4e38" "1.5" "1e0" "1d0" "1d308"))
+    (let ((ast (parse-lisp-source text)))
+      (is (eq :list (node-type ast))
+          (format nil "~a must still parse" text))))))
+
 (test slash-is-symbol-when-not-a-ratio
   (dolist (text '("3/-4" "-3/-4" "3.5/2"))
     (let ((node (first (node-children (parse-lisp-source text)))))
