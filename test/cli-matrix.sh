@@ -112,6 +112,9 @@ check find-bad 1 "$BIN" find -f "$TMP/base.lisp" --line 99 --col 0
 check extract-ok 0 "$BIN" extract -f "$TMP/base.lisp" --line1 0 --col1 0 --line2 1 --col2 0
 check validate-recovery 0 "$BIN" validate --file "$TMP/base.lisp" --recovery
 check format-canonical 0 "$BIN" format --file "$TMP/base.lisp" --canonical
+check format-check-clean 0 "$BIN" format --file "$TMP/base.lisp" --check
+mk messy.lisp '(defun  foo(x)  (+ x 1))'
+check format-check-drift 1 "$BIN" format --file "$TMP/messy.lisp" --check
 cp "$TMP/base.lisp" "$TMP/e9.lisp"
 check delete-end 0 "$BIN" delete-form -f "$TMP/e9.lisp" --end --write --quiet
 cp "$TMP/base.lisp" "$TMP/e10.lisp"

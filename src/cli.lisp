@@ -765,15 +765,26 @@
 (defun format/handler (cmd)
   (with-edit-context (cmd)
     (let ((canonical (clingon:getopt cmd :canonical))
-          (indent (clingon:getopt cmd :indent)))
+          (indent (clingon:getopt cmd :indent))
+          (check (clingon:getopt cmd :check)))
+      (when (and check (or write preview))
+        (format *error-output* "Error: --check does not write or preview; drop --write/--preview~%")
+        (clingon:exit 1))
       (handler-case
           (let ((formatted
                   (if canonical
                       (format-source text :indent indent)
                       (format-minimal text :recovery recovery))))
-            (when (and (not canonical) (not quiet))
+            (when (and (not canonical) (not quiet) (not check))
               (format *error-output* "Minimal format (jams + broken-indentation only); pass --canonical for whole-file restyle~%"))
-            (deliver-edit-result formatted original-text file preview write quiet))
+            (if check
+                (if (string= formatted text)
+                    (format *standard-output* "Format clean.~%")
+                    (let ((diff (generate-unified-diff text formatted (or file "<input>"))))
+                      (when diff
+                        (format *standard-output* "~a" diff))
+                      (clingon:exit 1)))
+                (deliver-edit-result formatted original-text file preview write quiet)))
         (error (c)
           (output-edit-result nil (format nil "~a" c)))))))
 
@@ -783,9 +794,12 @@
    :usage "--file FILE | --code CODE"
    :description "Reformat source with consistent indentation"
    :options (list
-             (clingon:make-option :flag :long-name "canonical"
-                                  :description "Whole-file restyle (default is minimal: jams + broken indentation)"
-                                  :key :canonical)
+              (clingon:make-option :flag :long-name "canonical"
+                                   :description "Whole-file restyle (default is minimal: jams + broken indentation)"
+                                   :key :canonical)
+              (clingon:make-option :flag :long-name "check"
+                                   :description "Report formatting drift without changing anything (exit 1 on drift)"
+                                   :key :check)
              (clingon:make-option :string :long-name "file" :short-name #\f
                                   :description "File to format" :key :file)
              (clingon:make-option :string :long-name "code"
