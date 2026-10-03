@@ -751,6 +751,72 @@
 
 (register-lint-rule "duplicate-top-level" #'lint-duplicate-top-level-forms
                     :doc "Byte-identical top-level forms.")
+
+(defun walk-lint-nodes (node function)
+  "Call FUNCTION on NODE and every descendant, pre-order."
+  (when (nodep node)
+    (funcall function node)
+    (dolist (child (node-children node))
+      (walk-lint-nodes child function))))
+
+(defun lint-sharp-underscore-dispatch (text ast)
+  "Flag `#_` tokens. This SBCL build has no dispatch function for `#_`,
+   so it signals a reader error; the toolkit reads `#_` as an ordinary
+   symbol. That is a portability divergence worth surfacing, not a
+   silent acceptance."
+  (let ((diagnostics nil))
+    (walk-lint-nodes
+     ast
+     (lambda (node)
+       (when (and (eq (node-type node) :symbol)
+                    (node-start node) (node-end node))
+         (let ((source (ignore-errors (node-source-text text node))))
+           (when (and (stringp source)
+                      (>= (length source) 2)
+                      (char= (char source 0) #\#)
+                      (char= (char source 1) #\_))
+             (push (diagnostic-for-node
+                    text node
+                    :rule "sharp-underscore-dispatch"
+                    :severity :portability
+                    :message "The `#_` dispatch macro has no reader function here; the toolkit reads it as a symbol, which diverges from this SBCL build."
+                    :fix "Avoid `#_` in portable sources, or gate the file on a reader that defines it.")
+                   diagnostics))))))
+    (sort-lint-diagnostics diagnostics)))
+
+(defun lint-skipped-conditional-branch (text ast)
+  "Note feature-conditional branches the reader never reads. A skipped
+   target is stored as a symbol beginning where the feature ends, so it
+   is recognizable without re-reading the branch."
+  (let ((diagnostics nil))
+    (walk-lint-nodes
+     ast
+     (lambda (node)
+       (when (node-list-p node)
+         (let ((children (node-children node)))
+           (when (and (= (length children) 3)
+                      (nodep (first children))
+                      (nodep (second children))
+                      (nodep (third children))
+                      (eq (node-type (first children)) :symbol)
+                      (member (node-name (first children)) '("#+" "#-")
+                              :test #'string=)
+                      (eq (node-type (third children)) :symbol)
+                      (eql (node-start (third children))
+                           (node-end (second children))))
+             (push (diagnostic-for-node
+                    text node
+                    :rule "skipped-conditional-branch"
+                    :severity :info
+                    :message "A feature-conditional branch was skipped without validation (the reader never reads the absent branch)."
+                    :fix "If this branch must be checked, lint it under the corresponding feature.")
+                   diagnostics))))))
+    (sort-lint-diagnostics diagnostics)))
+
+(register-lint-rule "sharp-underscore-dispatch" #'lint-sharp-underscore-dispatch
+                    :doc "The `#_` dispatch macro, which this SBCL build rejects.")
+(register-lint-rule "skipped-conditional-branch" #'lint-skipped-conditional-branch
+                    :doc "Feature-conditional branches skipped without validation.")
 (defun find-forms-containing (text snippet &key recovery)
   "Return a list of (index node) pairs for top-level forms in TEXT
    whose source contains SNIPPET. Empty snippets match everything,

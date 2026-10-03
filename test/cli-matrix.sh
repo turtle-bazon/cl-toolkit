@@ -130,6 +130,8 @@ mk dupes.lisp '(defun same () 1)
 '
 check lint-dupes 1 "$BIN" lint -f "$TMP/dupes.lisp"
 check lint-json-dupes 1 "$BIN" lint -f "$TMP/dupes.lisp" --format json
+check lint-sharp-underscore 0 sh -c "$BIN lint --code '(list 1 #_2 3)' --format json --rules sharp-underscore-dispatch | grep -q sharp-underscore-dispatch"
+check lint-skipped-branch 0 sh -c "$BIN lint --code '(list #-other-lisp #\Name-Only)' --format json --rules skipped-conditional-branch | grep -q skipped-conditional-branch"
 check diff-same 0 "$BIN" diff-forms -f "$TMP/base.lisp" --name alpha
 check diff-names 1 "$BIN" diff-forms -f "$TMP/base.lisp" --name alpha --against-name beta
 cp "$TMP/base.lisp" "$TMP/e12.lisp"

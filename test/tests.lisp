@@ -339,6 +339,30 @@
     (is (string= "syntax-error" (getf (first (getf result :diagnostics)) :rule)))
     (is (eq :error (getf (first (getf result :diagnostics)) :severity)))))
 
+(test lint-sharp-underscore-dispatch
+  (let ((result (lint-source "(list 1 #_2 3)"
+                             :rules '("sharp-underscore-dispatch"))))
+    (is (null (getf result :ok)))
+    (is (= 1 (length (getf result :diagnostics))))
+    (let ((d (first (getf result :diagnostics))))
+      (is (string= "sharp-underscore-dispatch" (getf d :rule)))
+      (is (eq :portability (getf d :severity)))))
+  (let ((result (lint-source "(list 1 2 3)"
+                             :rules '("sharp-underscore-dispatch"))))
+    (is (getf result :ok))))
+
+(test lint-skipped-conditional-branch
+  (let ((result (lint-source "(list #-other-lisp #\\Name-Only-That-Lisp-Knows)"
+                             :rules '("skipped-conditional-branch"))))
+    (is (null (getf result :ok)))
+    (is (= 1 (length (getf result :diagnostics))))
+    (let ((d (first (getf result :diagnostics))))
+      (is (string= "skipped-conditional-branch" (getf d :rule)))
+      (is (eq :info (getf d :severity)))))
+  (let ((result (lint-source "(list #+sbcl (a b))"
+                             :rules '("skipped-conditional-branch"))))
+    (is (getf result :ok))))
+
 (test find-subform-matching-exact-no-fuzzy
   ;; contains-match would hit; exact must refuse
   (let* ((text "(defun f () (g (h 123)))")
