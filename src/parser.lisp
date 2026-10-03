@@ -638,7 +638,7 @@
   "Resolve RULES (NIL = all registered) to rule ids, signaling on unknown ids."
   (let ((ids (lint-rule-ids)))
     (cond ((null rules) ids)
-          (t (dolist (id rules ids)
+          (t (dolist (id rules rules)
                (unless (member id ids :test #'string=)
                  (error "Unknown lint rule ~s (known: ~{~s~^, ~})" id ids)))))))
 
@@ -817,6 +817,69 @@
                     :doc "The `#_` dispatch macro, which this SBCL build rejects.")
 (register-lint-rule "skipped-conditional-branch" #'lint-skipped-conditional-branch
                     :doc "Feature-conditional branches skipped without validation.")
+
+(defparameter *lint-defining-heads*
+  '("defun" "defvar" "defparameter" "defmacro" "defgeneric" "defclass"
+    "defstruct" "deftype" "define-compiler-macro" "defsetf"
+    "define-setf-expander" "defpackage" "test")
+  "Heads whose second child names the thing being defined. DEFMETHOD is
+   deliberately absent: same-name methods with different specializers
+   are overloading, not redefinition.")
+
+(defun lint-definition-key (node)
+  "If NODE is a defining top-level form, its (head . name) key with
+   both parts upcased for case-insensitive comparison. Otherwise NIL."
+  (when (node-list-p node)
+    (let ((children (node-children node)))
+      (when (and (>= (length children) 2)
+                 (nodep (first children))
+                 (nodep (second children))
+                 (eq (node-type (first children)) :symbol)
+                 (eq (node-type (second children)) :symbol)
+                 (member (node-name (first children))
+                         *lint-defining-heads*
+                         :test #'string-equal))
+        (cons (string-upcase (node-name (first children)))
+              (string-upcase (node-name (second children))))))))
+
+(defun lint-redefinition-check (text seen node)
+  "Check NODE against the SEEN definition table. Records first-seen
+   definitions in SEEN. Returns a diagnostic when NODE redefines a
+   (head . name) pair with a different body, else NIL. Byte-identical
+   copies return NIL: duplicate-top-level owns those."
+  (let ((key (lint-definition-key node)))
+    (when key
+      (let ((prev (gethash key seen)))
+        (cond ((null prev)
+               (setf (gethash key seen) node)
+               nil)
+              ((string= (node-source-text text prev)
+                        (node-source-text text node))
+               nil)
+              (t
+               (multiple-value-bind (line col)
+                   (cl-toolkit-ast:offset-to-line-col text (node-start prev))
+                 (diagnostic-for-node
+                  text node
+                  :rule "redefined-top-level"
+                  :severity :warning
+                  :message (format nil "~a is redefined here (first defined at line ~a, col ~a)"
+                                   (cdr key) line col)
+                  :fix "Remove the stale definition or rename one of them."))))))))
+
+(defun lint-redefined-top-level (text ast)
+  "Flag a top-level definition whose (head . name) was already defined
+   above with a different body."
+  (let ((seen (make-hash-table :test #'equal))
+        (diagnostics nil))
+    (dolist (node (list-top-level ast))
+      (let ((hit (lint-redefinition-check text seen node)))
+        (when hit
+          (push hit diagnostics))))
+    (sort-lint-diagnostics diagnostics)))
+
+(register-lint-rule "redefined-top-level" #'lint-redefined-top-level
+                    :doc "Same (head . name) defined twice with different bodies.")
 (defun find-forms-containing (text snippet &key recovery)
   "Return a list of (index node) pairs for top-level forms in TEXT
    whose source contains SNIPPET. Empty snippets match everything,

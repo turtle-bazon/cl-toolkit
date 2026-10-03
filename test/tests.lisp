@@ -351,6 +351,34 @@
                              :rules '("sharp-underscore-dispatch"))))
     (is (getf result :ok))))
 
+(test lint-redefined-top-level
+  (let ((result (lint-source "(defun f () 1)
+(defun f () 2)"
+                             :rules '("redefined-top-level"))))
+    (is (null (getf result :ok)))
+    (is (= 1 (length (getf result :diagnostics))))
+    (let ((d (first (getf result :diagnostics))))
+      (is (string= "redefined-top-level" (getf d :rule)))
+      (is (eq :warning (getf d :severity)))
+      (is (search "line 0" (getf d :message)))))
+  ;; identical copies belong to duplicate-top-level, not this rule
+  (let ((result (lint-source "(defun f () 1)
+(defun f () 1)"
+                             :rules '("redefined-top-level"))))
+    (is (getf result :ok)))
+  ;; different heads do not clash, and overloading is not redefinition
+  (let ((result (lint-source "(defun f () 1)
+(defmacro f () 2)
+(defmethod f ((x t)) x)
+(defmethod f ((x null)) nil)"
+                             :rules '("redefined-top-level"))))
+    (is (getf result :ok)))
+  ;; repeated calls are not definitions
+  (let ((result (lint-source "(foo 1)
+(foo 2)"
+                             :rules '("redefined-top-level"))))
+    (is (getf result :ok))))
+
 (test lint-skipped-conditional-branch
   (let ((result (lint-source "(list #-other-lisp #\\Name-Only-That-Lisp-Knows)"
                              :rules '("skipped-conditional-branch"))))
