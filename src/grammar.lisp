@@ -902,11 +902,18 @@
   (:destructure (marker bits &bounds start end)
     (declare (ignore marker))
     (make-node :list
-               :children (list (make-node :symbol :name "BIT-VECTOR"
-                                          :start start :end (+ start 2))
-                               (make-node :symbol
-                                          :name (esrap:text bits)
-                                          :start (+ start 2) :end end))
+               ;; "#*" with no bits still reads as an (empty) bit vector,
+               ;; but a second child would have nothing to point at, and a
+               ;; zero-width leaf breaks the span invariants the editing
+               ;; commands rely on
+               :children (if bits
+                             (list (make-node :symbol :name "BIT-VECTOR"
+                                              :start start :end (+ start 2))
+                                   (make-node :symbol
+                                              :name (esrap:text bits)
+                                              :start (+ start 2) :end end))
+                             (list (make-node :symbol :name "BIT-VECTOR"
+                                              :start start :end end)))
                :start start :end end)))
 
 ;;; Top-level form

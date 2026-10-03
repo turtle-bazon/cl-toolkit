@@ -20,6 +20,8 @@
    #:node-form-name
    #:offset-to-line-col
    #:offset-to-line-col-inverse
+   #:check-node-spans
+   #:check-source-spans
    #:node-to-json
    #:node-to-json-string
    #:escape-json-string))
@@ -61,6 +63,8 @@
                 #:node-list-p
                 #:node-atom-p
                 #:node-error-p
+                #:check-node-spans
+                #:check-source-spans
                 #:node-to-json
                 #:node-to-json-string
                 #:node-form-name

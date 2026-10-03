@@ -649,6 +649,94 @@
     (is (parse-rejects text)
         (format nil "~a must be rejected like the reader rejects it" text))))
 
+;;; --- Span invariants ---
+;;;;
+;;; Every node's [start, end) must be a real range inside its parent, in
+;;; source order among its siblings, and non-empty once a token has been
+;;; consumed -- the editing commands slice with exactly these numbers.
+
+(test span-invariants-hold-on-tricky-inputs
+  (dolist (text (list "(defun f (a b) (+ a b))"
+                      "(a . b)"
+                      "(a . (b c))"
+                      "(a . nil)"
+                      "#()"
+                      "#(1 #() 2)"
+                      "#*"
+                      "#*101"
+                      "\"a\\\"b\""
+                      "#\\Space"
+                      "(quote x)"
+                      "(quote (quote x))"
+                      "`(a ,b ,@c)"
+                      "#+sbcl 1 #-no-such-feature 2"
+                      "#.(+ 1 2)"
+                      ";; comment only"
+                      "(a ; trailing\n  b)"
+                      "|weird symbol|"
+                      ":pkg:name"
+                      "1/2"
+                      "-3/4"
+                      ".5"
+                      "5."
+                      "#xFF"))
+    (let ((ast (parse-lisp-source text)))
+      (unless (eq (node-type ast) :error)
+        (is (null (check-node-spans ast))
+            (format nil "span problems in ~s: ~s" text (check-node-spans ast)))
+        (is (null (check-source-spans ast text))
+            (format nil "leaf span problems in ~s: ~s"
+                    text (check-source-spans ast text)))))))
+
+(test span-checker-rejects-broken-nodes
+  ;; a child that reaches outside its parent
+  (let ((bad (make-node :list
+                        :children (list (make-node :symbol :name "a"
+                                                   :start 0 :end 1))
+                        :start 5 :end 6)))
+    (is (check-node-spans bad))
+    (is (member "escapes its parent"
+                (mapcar (lambda (p) (getf p :reason)) (check-node-spans bad))
+                :test #'string=)))
+  ;; start after end
+  (is (check-node-spans (make-node :symbol :name "a" :start 9 :end 2)))
+  ;; siblings running backwards
+  (let ((bad (make-node :list
+                        :children (list (make-node :symbol :name "a" :start 4 :end 5)
+                                        (make-node :symbol :name "b" :start 1 :end 2))
+                        :start 0 :end 9)))
+    (is (member "sibling starts before its predecessor"
+                (mapcar (lambda (p) (getf p :reason)) (check-node-spans bad))
+                :test #'string=)))
+  ;; a well-formed tree reports nothing
+  (let ((ok (parse-lisp-source "(defun f () 1)")))
+    (is (null (check-node-spans ok)))
+    (is (null (check-source-spans ok "(defun f () 1)")))))
+
+(test leaf-span-must-read-back-as-the-token
+  (let ((ast (parse-lisp-source "\"hi\"")))
+    (is (null (check-source-spans ast "\"hi\""))))
+  ;; a :string node whose range does not cover the quotes is reported
+  (let ((bogus (make-node :list
+                          :children (list (make-node :string :value "hi"
+                                                     :start 0 :end 2))
+                          :start 0 :end 2)))
+    (is (member "string span is not wrapped in quotes"
+                (mapcar (lambda (p) (getf p :reason))
+                        (check-source-spans bogus "hi"))
+                :test #'string=))))
+
+(test empty-bit-vector-has-no-zero-width-child
+  (let* ((ast (parse-lisp-source "#*"))
+         (node (first (node-children ast)))
+         (kids (node-children node)))
+    (is (= 1 (length kids)))
+    (is (string= "BIT-VECTOR" (node-name (first kids))))
+    (is (= (node-start node) (node-start (first kids))))
+    (is (= (node-end node) (node-end (first kids)))))
+  (let ((ast (parse-lisp-source "#*101")))
+    (is (null (check-source-spans ast "#*101")))))
+
 (test empty-vector-is-supported
   ;; #() is a vector with no elements; it used to parse as a "#" symbol
   ;; plus an empty list, and then to fail outright once "#(" was barred

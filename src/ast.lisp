@@ -131,6 +131,107 @@
         (error "Position out of range: line ~a, col ~a (file has ~a lines)"
                line col (1+ current-line)))))
 
+;;; Span invariants
+;;;;
+;;; Every node carries the half-open byte range [start, end) of the
+;;; source it came from, and the editing commands slice with those
+;;; numbers. A node that claims a range outside its parent, or siblings
+;;; that run backwards, produces silently wrong edits, so the invariants
+;;; are worth stating once and checking mechanically.
+;;;;
+;;;   1. both bounds are integers and start <= end
+;;;   2. a child lies inside its parent: parent.start <= child.start and
+;;;      child.end <= parent.end
+;;;   3. siblings appear in source order: a child's start is not before
+;;;      its predecessor's start
+;;;   4. a child that consumed something has start < end (a zero-width
+;;;      child is only legitimate for a skipped feature branch)
+;;;   5. bounds stay inside TEXT when TEXT is supplied
+
+(defun span-violation (node reason)
+  (list :type (node-type node)
+        :start (node-start node)
+        :end (node-end node)
+        :reason reason))
+
+(defun check-node-spans (node &optional text)
+  "Return a list of span problems found in NODE's tree, deepest first.
+   Each problem is a plist with :type, :start, :end and :reason. An empty
+   list means every node satisfies the span invariants. TEXT, when given,
+   additionally bounds-checks against the source length."
+  (let ((problems nil)
+        (limit (and text (length text))))
+    (labels ((walk (node parent)
+               (let ((start (node-start node))
+                     (end (node-end node)))
+                 (cond ((not (and (integerp start) (integerp end)))
+                        (push (span-violation node "bounds are not integers")
+                              problems))
+                       ((> start end)
+                        (push (span-violation node "start is after end") problems))
+                       ((and parent
+                             (or (< start (node-start parent))
+                                 (> end (node-end parent))))
+                        (push (span-violation node "escapes its parent") problems))
+                       ((and limit (or (> end limit) (< start 0)))
+                        (push (span-violation node "outside the source")
+                              problems)))
+                 (let ((kids (node-children node))
+                       (previous nil))
+                   (dolist (kid kids)
+                     ;; Overlap is fine -- a reader-macro marker can cover
+                     ;; the same character as its parent -- but siblings
+                     ;; must still appear in source order.
+                     (when (and previous (> (node-start previous) (node-start kid)))
+                       (push (span-violation kid
+                                             "sibling starts before its predecessor")
+                             problems))
+                     (when (and (= (node-start kid) (node-end kid))
+                                (not (eq (node-type kid) :skip)))
+                       (push (span-violation kid "zero-width child consumed nothing")
+                             problems))
+                     (walk kid node)
+                     (setf previous kid))))))
+      (walk node nil))
+    (nreverse problems)))
+
+(defun leaf-span-problem (node text)
+  "A problem plist for a childless NODE whose range does not read back as
+   the token it parsed, or NIL."
+  (let* ((start (node-start node))
+         (end (node-end node)))
+    (when (and (integerp start) (integerp end)
+               (<= start end (length text))
+               (= start end))
+      (return-from leaf-span-problem
+        (span-violation node "leaf span is empty")))
+    (when (or (not (integerp start)) (not (integerp end))
+              (> start end) (< start 0) (> end (length text)))
+      (return-from leaf-span-problem nil))
+    (let ((slice (subseq text start end)))
+      (case (node-type node)
+        (:string
+         (unless (and (>= (length slice) 2)
+                      (char= (char slice 0) (code-char 34))
+                      (char= (char slice (1- (length slice))) (code-char 34)))
+           (span-violation node "string span is not wrapped in quotes")))
+        (:character
+         (unless (and (>= (length slice) 2) (char= (char slice 0) (code-char 92)))
+           (span-violation node "character span has no backslash prefix")))
+        (t nil)))))
+
+(defun check-source-spans (node text)
+  "CHECK-NODE-SPANS plus a leaf check: every childless node's range must
+   read back as the token it parsed. Returns a list of problems."
+  (let ((problems (check-node-spans node text)))
+    (labels ((walk (n)
+               (if (node-children n)
+                   (dolist (k (node-children n)) (walk k))
+                   (let ((problem (leaf-span-problem n text)))
+                     (when problem (push problem problems))))))
+      (walk node))
+    (nreverse problems)))
+
 ;;; JSON serialization using cl-json
 
 (defun escape-json-string (str)
