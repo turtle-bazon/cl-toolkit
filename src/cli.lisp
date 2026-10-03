@@ -29,12 +29,22 @@
           do (write-char ch out))))
 
 (defun read-input (cmd)
-  "Read input from --code, --file, or stdin (in that order)."
+  "Read input from --code, --file, a bare FILE argument, or stdin (in
+   that order). `parse FILE` documents the bare argument, so it has to
+   mean the file -- silently parsing nothing instead is worse than an
+   error."
   (let ((code (clingon:getopt cmd :code))
-        (file (clingon:getopt cmd :file)))
+        (file (clingon:getopt cmd :file))
+        (args (clingon:command-arguments cmd)))
     (cond
       (code code)
       (file (read-file-to-string file))
+      (args
+       (when (> (length args) 1)
+         (format *error-output* "Expected at most one FILE argument, got: ~{~a~^ ~}~%"
+                 args)
+         (clingon:exit 1))
+       (read-file-to-string (first args)))
       (t (read-stdin)))))
 
 (defun output-json (node)

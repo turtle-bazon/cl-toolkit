@@ -28,6 +28,17 @@ mk body.lisp '(defun new-body () (function list))'
 
 # --- read-only commands ---
 check parse 0 "$BIN" parse --file "$TMP/base.lisp"
+# `parse FILE` is the documented spelling (see parse --help examples) and
+# must parse the file. It used to ignore the positional argument and
+# print an empty AST with exit 0, which reads like success.
+check parse-positional-file 0 "$BIN" parse "$TMP/base.lisp"
+check parse-positional-missing-file 1 "$BIN" parse "$TMP/no-such-file.lisp"
+check parse-two-positional-args 1 "$BIN" parse "$TMP/base.lisp" "$TMP/base.lisp"
+if [ "$("$BIN" parse "$TMP/base.lisp" 2>/dev/null)" = "$("$BIN" parse --file "$TMP/base.lisp" 2>/dev/null)" ]; then
+  check parse-positional-matches-flag 0 true
+else
+  check parse-positional-matches-flag 1 true
+fi
 check validate 0 "$BIN" validate --file "$TMP/base.lisp"
 check top-level 0 "$BIN" top-level --file "$TMP/base.lisp" --names --preview-chars 20
 check find-forms 0 "$BIN" find-forms -f "$TMP/base.lisp" --contains gamma
