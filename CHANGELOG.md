@@ -5,7 +5,35 @@ marked `BREAKING:`.
 
 ## [Unreleased]
 
-### Fixed
+### Added
+
+- **Lint as a rule registry with stable machine output.** Diagnostics
+  are plists (`rule`, `severity`, `line`, `col`, `start`, `end`,
+  `message`, `fix`); `lint --format json` emits
+  `{"ok":bool,"diagnostics":[...]}` and `--rules` selects a subset.
+  Rules: `duplicate-top-level`, `redefined-top-level` (same head+name,
+  different bodies; byte-identical copies stay with duplicates),
+  `empty-operator` (`()` in operator position only — bare and quoted
+  NIL are clean), `eval-hazard` (`#.` and `(eval ...)`),
+  `sharp-underscore-dispatch` (portability: this SBCL build rejects
+  `#_`), and `skipped-conditional-branch` (info: branches the reader
+  never reads). Legacy text output and exit behavior are unchanged.
+- **`rename`, `wrap-form`, `unwrap-form` structural commands** (by
+  name, index, or position) plus matching `batch-replace` operations
+  (`rename-name`, `wrap-name`, `unwrap-name`). Rename touches only the
+  definition/operator slot; wrap splices both halves atomically;
+  unwrap accepts single-child lists only. Batch failures now report
+  `Batch edit N (OPERATION) failed: cause`.
+- **`format --check`** for CI: exit 0 when stable, otherwise the diff
+  on stdout and exit 1; never writes.
+- `[ ] { }` are constituent characters, not list delimiters
+  (`[1]` is the symbol `|1|`): symbols may start with brackets, and
+  balance/comma/format/chunking no longer count them as nesting.
+
+### Tests
+
+- FiveAM 139 -> 290 checks (reader regressions, balance/format,
+  single/batch edit ops, match-ambiguity policies, move directions).
 
 - **Reader coverage from a 455-file/17-lib sweep (alexandria, babel,
   trivia, iterate, cffi, hunchentoot, ...): 3 parse errors + 3
@@ -33,8 +61,13 @@ marked `BREAKING:`.
 ### Tests
 
 - FiveAM 139 -> 290 checks (reader regressions, balance/format,
-  single/batch edit ops, match-ambiguity policies, move directions).
-- CLI matrix 62 -> 102 checks; format 21 -> 26; bugfix 18 -> 22.
+  single/batch edit ops, match-ambiguity policies, move directions),
+  then to 549 with lint rules (schema, portability, redefinition,
+  empty-operator, eval hazards), rename/wrap/unwrap spans and batch
+  ops, and batch error annotation.
+- CLI matrix 62 -> 102 checks, then to 120 with lint JSON/rules,
+  format --check, rename/wrap/unwrap, and batch rename/wrap paths;
+  format 21 -> 26; bugfix 18 -> 22.
 
 ## [0.5.3] - 2026-08-24
 

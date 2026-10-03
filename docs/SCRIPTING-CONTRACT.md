@@ -65,6 +65,34 @@ All guards emit dual-channel refusals and exit 1.
 
 ---
 
+## Lint output
+
+- Text mode (default) prints human findings on **stderr** and exits 1
+  on any finding, 0 when clean.
+- `--format json` prints exactly one JSON object on **stdout**:
+  `{"ok":bool,"diagnostics":[...]}`. Each diagnostic carries `rule`
+  (stable string id), `severity` (`error`, `warning`, `portability`,
+  `style`, `info`), `line`, `col`, `start`, `end`, `message`, `fix`.
+  Missing positions are `null`, never omitted.
+- `--rules A,B` runs a subset; unknown ids exit 1. With no `--rules`
+  every registered rule runs.
+- `lint-rule-ids` (Lisp API) lists the registry in order; rule
+  functions take `(text ast)` and return diagnostics.
+
+---
+
+## Batch edits
+
+- Operation keys: the name/index/match/position family plus
+  `rename-name` (`:name` + `:to`), `wrap-name` (`:name` + `:open` +
+  `:close`), and `unwrap-name` (`:name`).
+- Nothing is written unless the whole batch succeeds. A failing step
+  reports `Batch edit N (OPERATION) failed: cause` with 1-based N in
+  application order (name edits first, then indices high-to-low, then
+  positions) — fix that step, not the whole plan.
+
+---
+
 ## Match ops vs patch-span — whole node vs byte prefix
 
 - `replace-form --match`, batch `replace-match`/`delete-match` operate on

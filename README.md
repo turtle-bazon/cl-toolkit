@@ -6,6 +6,7 @@ Lisp code toolkit for structural analysis and editing.
 
 - **Parse**: Parse Lisp source code to JSON AST
 - **Validate**: Check syntax and report errors/warnings
+- **Lint**: Stable rule ids with text and JSON reports (duplicates, redefinitions, eval hazards, reader portability)
 - **Find**: Find form at specific line/column
 - **Extract**: Extract forms in a range
 - **Top-level**: List top-level forms
@@ -256,6 +257,68 @@ All modification commands validate both input and result by default:
 
 **Note:** The PEG parser handles standard Lisp syntax including backquote, reader macros, and special forms. If you encounter a validation failure, check that your code has balanced parentheses and correct syntax. Use `--no-validate-input` or `--no-validate-result` only as a last resort when you're certain the code is valid but the parser rejects it.
 
+## Lint
+
+`lint` reports findings with stable rule ids, severities, and spans.
+The default text report goes to stderr and exits 1 on any finding;
+`--format json` emits `{"ok":bool,"diagnostics":[...]}` on stdout,
+where each diagnostic carries `rule`, `severity`, `line`, `col`,
+`start`, `end`, `message`, and `fix`. `--rules` selects a subset;
+with no `--rules` every registered rule runs.
+
+```bash
+# Human report (duplicates only, legacy output preserved)
+cl-toolkit lint --file myfile.lisp
+
+# Machine report, all rules
+cl-toolkit lint --file myfile.lisp --format json
+
+# One rule
+cl-toolkit lint --file myfile.lisp --format json --rules redefined-top-level
+```
+
+Current rules and severities:
+
+| Rule | Severity | Finds |
+|---|---|---|
+| `syntax-error` | error | input that does not parse (only finding reported) |
+| `duplicate-top-level` | warning | byte-identical top-level forms |
+| `redefined-top-level` | warning | same `(head . name)` defined twice with different bodies |
+| `empty-operator` | warning | `()` in operator position (calls NIL) |
+| `eval-hazard` | warning | `#.` read-time eval and `(eval ...)` calls |
+| `sharp-underscore-dispatch` | portability | `#_`, which this SBCL build rejects |
+| `skipped-conditional-branch` | info | absent-feature branches the reader never reads |
+
+`[ ] { }` are constituent characters, not list delimiters
+(`[1]` is the symbol `|1|`), so bracket imbalance is never reported.
+
+## Structural edits
+
+```bash
+# Rename a definition (or call operator); references elsewhere are untouched
+cl-toolkit rename --file myfile.lisp --name foo --to bar --write
+
+# Wrap a form atomically (both halves land together or neither does)
+cl-toolkit wrap-form --file myfile.lisp --name foo --open '(progn ' --close ')' --write
+
+# Unwrap a single-child list; multi-child and empty lists refuse
+cl-toolkit unwrap-form --file myfile.lisp --name foo --write
+```
+
+`batch-replace` additionally accepts `rename-name` (`:name` + `:to`),
+`wrap-name` (`:name` + `:open` + `:close`), and `unwrap-name` (`:name`).
+A failing batch reports `Batch edit N (OPERATION) failed: cause`, and
+nothing is written unless the whole batch succeeds.
+
+## Format drift check
+
+```bash
+# CI gate: exit 0 when stable, otherwise the diff on stdout and exit 1
+cl-toolkit format --file myfile.lisp --check
+```
+
+`--check` never writes; combining it with `--write`/`--preview` is an error.
+
 ## Insert Behavior
 
 ### `insert-form` and `append-form`
@@ -342,7 +405,7 @@ node ~/cl-toolkit/setup.js .opencode
 ### Agent Usage
 
 Tell the agent:
-> Use cl-toolkit to parse/validate/edit Lisp code. Commands: parse, validate, find, extract, top-level, source-of, find-forms, delete-form, insert-form, append-form, insert, replace-form, move-form, balance, format.
+> Use cl-toolkit to parse/validate/edit Lisp code. Commands: parse, validate, lint, find, extract, top-level, source-of, find-forms, delete-form, insert-form, append-form, insert, replace-form, rename, wrap-form, unwrap-form, move-form, balance, format.
 
 Example prompts:
 - "Parse this file and show me the top-level forms"
