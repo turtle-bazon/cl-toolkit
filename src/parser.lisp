@@ -547,16 +547,210 @@
   (- (getf (analyze-balance new-text) :final-depth)
      (getf (analyze-balance old-text) :final-depth)))
 
-(defun duplicate-top-level-forms (text &key recovery)
-  "Return groups ((offset1 offset2 ...) ...) of top-level forms with
-   byte-identical source — the stray-(in-package x4) smell."
+(defun duplicate-top-level-nodes (text &key recovery)
+  "Group top-level NODES by byte-identical source. Returns a list of
+   node groups, longest-first occurrence order preserved within groups.
+   The stray-(in-package x4) smell is the motivating case."
   (let* ((ast (parse-for-edit text recovery))
          (by-source (make-hash-table :test #'equal)))
     (dolist (node (list-top-level ast))
-      (push (node-start node) (gethash (node-source-text text node) by-source nil)))
-    (loop for offsets being the hash-values of by-source
-          when (> (length offsets) 1)
-            collect (nreverse offsets))))
+      (push node (gethash (node-source-text text node) by-source nil)))
+    (loop for nodes being the hash-values of by-source
+          when (> (length nodes) 1)
+            collect (sort (copy-list nodes) #'< :key #'node-start))))
+
+(defun duplicate-top-level-forms (text &key recovery)
+  "Return groups ((offset1 offset2 ...) ...) of top-level forms with
+   byte-identical source — the stray-(in-package x4) smell."
+  (mapcar (lambda (nodes) (mapcar #'node-start nodes))
+          (duplicate-top-level-nodes text :recovery recovery)))
+
+;;; --- Lint diagnostics ---
+;;;
+;;; A lint diagnostic is a plist with stable keys so editors, CI, and
+;;; agents can consume findings without scraping human text:
+;;; (:rule STRING :severity KEYWORD :line INT-OR-NIL :col INT-OR-NIL
+;;;  :start OFFSET-OR-NIL :end OFFSET-OR-NIL :message STRING :fix STRING-OR-NIL).
+;;; Severities, weakest-last: :error breaks the build, :warning and
+;;; :portability deserve attention, :style and :info are advisory.
+
+(defparameter *lint-severities* '(:error :warning :portability :style :info)
+  "Lint severities in increasing-advisory order.")
+
+(defun lint-severity-rank (severity)
+  "Numeric rank of SEVERITY for deterministic diagnostic ordering."
+  (or (position severity *lint-severities*) (length *lint-severities*)))
+
+(defun make-lint-diagnostic (&key rule severity line col start end message fix)
+  "Build one lint diagnostic plist. RULE is a stable string id,
+   SEVERITY a keyword, MESSAGE a string, FIX an optional suggestion."
+  (unless (stringp rule)
+    (error "Lint rule id must be a string, not ~s" rule))
+  (unless (member severity *lint-severities*)
+    (error "Unknown lint severity ~s" severity))
+  (unless (stringp message)
+    (error "Lint message must be a string, not ~s" message))
+  (list :rule rule :severity severity :line line :col col
+        :start start :end end :message message :fix fix))
+
+(defun lint-diagnostic< (a b)
+  "Deterministic diagnostic order: offset, span end, severity, rule, message."
+  (let ((sa (or (getf a :start) most-positive-fixnum))
+        (sb (or (getf b :start) most-positive-fixnum)))
+    (cond ((< sa sb) t)
+          ((> sa sb) nil)
+          ((< (or (getf a :end) most-positive-fixnum)
+              (or (getf b :end) most-positive-fixnum)) t)
+          ((> (or (getf a :end) most-positive-fixnum)
+              (or (getf b :end) most-positive-fixnum)) nil)
+          ((< (lint-severity-rank (getf a :severity))
+              (lint-severity-rank (getf b :severity))) t)
+          ((> (lint-severity-rank (getf a :severity))
+              (lint-severity-rank (getf b :severity))) nil)
+          ((string< (getf a :rule) (getf b :rule)) t)
+          ((string> (getf a :rule) (getf b :rule)) nil)
+          (t (string< (getf a :message) (getf b :message))))))
+
+(defun sort-lint-diagnostics (diagnostics)
+  "Return DIAGNOSTICS in deterministic order."
+  (sort (copy-list diagnostics) #'lint-diagnostic<))
+
+(defvar *lint-rules* nil
+  "Registered lint rules as ((id function doc) ...) in registration order.")
+
+(defun register-lint-rule (id function &key doc)
+  "Register a lint rule. ID is a stable string, FUNCTION takes
+   (text ast) and returns diagnostics. Re-registering ID replaces it."
+  (unless (stringp id)
+    (error "Lint rule id must be a string, not ~s" id))
+  (unless (functionp function)
+    (error "Lint rule ~s must be a function, not ~s" id function))
+  (setf *lint-rules*
+        (append (remove id *lint-rules* :key #'first :test #'string=)
+                (list (list id function (or doc "")))))
+  id)
+
+(defun lint-rule-ids ()
+  "Stable lint rule ids in registration order."
+  (mapcar #'first *lint-rules*))
+
+(defun resolve-lint-rules (rules)
+  "Resolve RULES (NIL = all registered) to rule ids, signaling on unknown ids."
+  (let ((ids (lint-rule-ids)))
+    (cond ((null rules) ids)
+          (t (dolist (id rules ids)
+               (unless (member id ids :test #'string=)
+                 (error "Unknown lint rule ~s (known: ~{~s~^, ~})" id ids)))))))
+
+(defun diagnostic-for-node (text node &key rule severity message fix)
+  "Build a diagnostic for NODE's span, deriving line/col from TEXT."
+  (let ((start (node-start node))
+        (end (node-end node)))
+    (multiple-value-bind (line col)
+        (if start
+            (cl-toolkit-ast:offset-to-line-col text start)
+            (values nil nil))
+      (make-lint-diagnostic :rule rule :severity severity
+                            :line line :col col
+                            :start start :end end
+                            :message message :fix fix))))
+
+(defun lint-error-position (message)
+  "Offset after \"Position \" in a parse error MESSAGE, or NIL."
+  (let ((idx (search "Position " message)))
+    (when idx
+      (parse-integer message :start (+ idx (length "Position "))
+                     :junk-allowed t))))
+
+(defun lint-syntax-diagnostic (text message start end)
+  "One :error diagnostic for a failed parse, positioned precisely when
+   the message carries an offset."
+  (let* ((pos (lint-error-position message))
+         (at (if (and pos (<= 0 pos) (<= pos (length text))) pos start)))
+    (multiple-value-bind (line col)
+        (if at
+            (cl-toolkit-ast:offset-to-line-col text at)
+            (values nil nil))
+      (make-lint-diagnostic :rule "syntax-error" :severity :error
+                            :line line :col col :start at :end end
+                            :message message
+                            :fix "Fix the syntax error; no other lint findings are reported until the file parses."))))
+
+(defun lint-source (text &key rules recovery)
+  "Run lint RULES (NIL = all registered) over TEXT. Returns
+   (:ok BOOL :diagnostics LIST). A file that does not parse yields one
+   syntax-error diagnostic and no rule findings."
+  (let* ((ast (parse-for-edit text recovery))
+         (ids (resolve-lint-rules rules)))
+    (if (eq (node-type ast) :error)
+        (list :ok nil
+              :diagnostics (list (lint-syntax-diagnostic
+                                  text (node-value ast)
+                                  (node-start ast) (node-end ast))))
+        (let ((diagnostics nil))
+          (dolist (id ids)
+            (let ((fn (second (assoc id *lint-rules* :test #'string=))))
+              (setf diagnostics
+                    (append diagnostics (funcall fn text ast)))))
+          (let ((sorted (sort-lint-diagnostics diagnostics)))
+            (list :ok (null sorted) :diagnostics sorted))))))
+
+(defun lint-value-json (value)
+  "Render one JSON scalar: strings escaped, NIL as null, else princ."
+  (cond ((null value) "null")
+        ((stringp value)
+         (format nil "\"~a\"" (cl-toolkit-ast:escape-json-string value)))
+        ((keywordp value)
+         (format nil "\"~a\"" (string-downcase (symbol-name value))))
+        (t (format nil "~a" value))))
+
+(defun lint-diagnostic-json (diagnostic)
+  "Render one lint diagnostic plist as a JSON object with stable keys."
+  (format nil "{\"rule\":~a,\"severity\":~a,\"line\":~a,\"col\":~a,\"start\":~a,\"end\":~a,\"message\":~a,\"fix\":~a}"
+          (lint-value-json (getf diagnostic :rule))
+          (lint-value-json (getf diagnostic :severity))
+          (lint-value-json (getf diagnostic :line))
+          (lint-value-json (getf diagnostic :col))
+          (lint-value-json (getf diagnostic :start))
+          (lint-value-json (getf diagnostic :end))
+          (lint-value-json (getf diagnostic :message))
+          (lint-value-json (getf diagnostic :fix))))
+
+(defun lint-diagnostics-json (result)
+  "Render a LINT-SOURCE result plist as stable machine JSON."
+  (format nil "{\"ok\":~a,\"diagnostics\":[~{~a~^,~}]}"
+          (if (getf result :ok) "true" "false")
+          (mapcar #'lint-diagnostic-json (getf result :diagnostics))))
+
+(defun lint-duplicate-top-level-forms (text ast)
+  "Diagnostics for byte-identical top-level forms. The first occurrence
+   is the keeper; each later copy gets one :warning."
+  (let ((by-source (make-hash-table :test #'equal))
+        (diagnostics nil))
+    (dolist (node (list-top-level ast))
+      (push node (gethash (node-source-text text node) by-source nil)))
+    (maphash (lambda (source nodes)
+               (declare (ignore source))
+               (let ((ordered (sort (copy-list nodes) #'< :key #'node-start)))
+                 (when (> (length ordered) 1)
+                   (let ((keeper (first ordered)))
+                     (multiple-value-bind (line col)
+                         (cl-toolkit-ast:offset-to-line-col
+                          text (node-start keeper))
+                       (dolist (node (rest ordered))
+                         (push (diagnostic-for-node
+                                text node
+                                :rule "duplicate-top-level"
+                                :severity :warning
+                                :message (format nil "Duplicate top-level form (first copy at line ~a, col ~a)"
+                                                 line col)
+                                :fix "Delete this duplicate or keep only one copy.")
+                               diagnostics)))))))
+             by-source)
+    (sort-lint-diagnostics diagnostics)))
+
+(register-lint-rule "duplicate-top-level" #'lint-duplicate-top-level-forms
+                    :doc "Byte-identical top-level forms.")
 (defun find-forms-containing (text snippet &key recovery)
   "Return a list of (index node) pairs for top-level forms in TEXT
    whose source contains SNIPPET. Empty snippets match everything,

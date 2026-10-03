@@ -38,6 +38,8 @@ check balance-wrong-delta 1 "$BIN" balance --code "(let ((x 1))" --expect-delta 
 check check-anchor-unique 0 "$BIN" check-anchor -f "$TMP/base.lisp" --text "(gamma)"
 check check-anchor-multi 1 "$BIN" check-anchor -f "$TMP/base.lisp" --text "("
 check lint-clean 0 "$BIN" lint -f "$TMP/base.lisp"
+check lint-json-clean 0 "$BIN" lint -f "$TMP/base.lisp" --format json
+check lint-json-rules 0 "$BIN" lint -f "$TMP/base.lisp" --format json --rules duplicate-top-level
 
 # --- edit commands: success paths (exit 0) ---
 cp "$TMP/base.lisp" "$TMP/e1.lisp"
@@ -127,6 +129,7 @@ mk dupes.lisp '(defun same () 1)
 (defun same () 1)
 '
 check lint-dupes 1 "$BIN" lint -f "$TMP/dupes.lisp"
+check lint-json-dupes 1 "$BIN" lint -f "$TMP/dupes.lisp" --format json
 check diff-same 0 "$BIN" diff-forms -f "$TMP/base.lisp" --name alpha
 check diff-names 1 "$BIN" diff-forms -f "$TMP/base.lisp" --name alpha --against-name beta
 cp "$TMP/base.lisp" "$TMP/e12.lisp"

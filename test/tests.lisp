@@ -302,6 +302,43 @@
   (is (null (duplicate-top-level-forms "(defun a () 1)
 (defun b () 2)"))))
 
+(test lint-schema-and-registry
+  (is (not (null (member "duplicate-top-level" (lint-rule-ids) :test #'string=))))
+  (let ((d (make-lint-diagnostic :rule "r" :severity :warning
+                                 :line 0 :col 1 :start 2 :end 3
+                                 :message "m" :fix "f")))
+    (is (string= "r" (getf d :rule)))
+    (is (eq :warning (getf d :severity)))
+    (is (string= "m" (getf d :message))))
+  (is (null (ignore-errors (make-lint-diagnostic :rule "r" :severity :nope
+                                                 :message "m"))))
+  (is (null (ignore-errors (lint-source "(a)" :rules '("no-such-rule"))))))
+
+(test lint-duplicate-diagnostics
+  (let* ((text "(in-package :cl)
+(defun a () 1)
+(in-package :cl)")
+         (result (lint-source text :rules '("duplicate-top-level"))))
+    (is (null (getf result :ok)))
+    (is (= 1 (length (getf result :diagnostics))))
+    (let ((d (first (getf result :diagnostics))))
+      (is (string= "duplicate-top-level" (getf d :rule)))
+      (is (eq :warning (getf d :severity)))
+      (is (search "first copy" (getf d :message)))))
+  (let ((result (lint-source "(defun a () 1)
+(defun b () 2)" :rules '("duplicate-top-level"))))
+    (is (getf result :ok))
+    (is (null (getf result :diagnostics)))
+    (is (string= "{\"ok\":true,\"diagnostics\":[]}"
+                 (lint-diagnostics-json result)))))
+
+(test lint-syntax-error-diagnostic
+  (let ((result (lint-source "(defun a () ")))
+    (is (null (getf result :ok)))
+    (is (= 1 (length (getf result :diagnostics))))
+    (is (string= "syntax-error" (getf (first (getf result :diagnostics)) :rule)))
+    (is (eq :error (getf (first (getf result :diagnostics)) :severity)))))
+
 (test find-subform-matching-exact-no-fuzzy
   ;; contains-match would hit; exact must refuse
   (let* ((text "(defun f () (g (h 123)))")

@@ -97,6 +97,13 @@
    #:split-string-on-char
    #:net-depth-delta
    #:duplicate-top-level-forms
+   #:duplicate-top-level-nodes
+   #:lint-duplicate-top-level-forms
+   #:make-lint-diagnostic
+   #:register-lint-rule
+   #:lint-rule-ids
+   #:lint-source
+   #:lint-diagnostics-json
    #:node-source-text
    #:split-jammed-top-level
    #:splice-replacement

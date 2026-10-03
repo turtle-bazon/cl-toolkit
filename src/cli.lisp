@@ -2063,31 +2063,77 @@
 ;;; Lint Command (duplicate form detection)
 ;;; ============================================================
 
+(defun lint-rules-from (rules-option)
+  "Parse a comma-separated --rules value into rule ids, or NIL for all."
+  (when (and rules-option (> (length rules-option) 0))
+    (remove-if (lambda (s) (= (length s) 0))
+               (mapcar (lambda (s)
+                         (string-trim '(#\Space #\Tab) s))
+                       (split-string-on-char rules-option #\,)))))
+
 (defun lint/handler (cmd)
   (let* ((recovery (clingon:getopt cmd :recovery))
-         (text (read-input cmd))
-         (groups (duplicate-top-level-forms text :recovery recovery)))
-    (if groups
-        (progn
-          (dolist (g groups)
-            (format *error-output* "Duplicate top-level forms at offsets ~{~a~^, ~}:~%" g)
-            (dolist (off g)
-              (multiple-value-bind (l c)
-                  (cl-toolkit-ast::offset-to-line-col text off)
-                (format *error-output* "  [line ~a, col ~a]~%" l c))))
-          (clingon:exit 1))
-        (format *standard-output* "No duplicate top-level forms.~%"))))
+         (format (or (clingon:getopt cmd :format) "text"))
+         (rules (lint-rules-from (clingon:getopt cmd :rules)))
+         (text (read-input cmd)))
+    (unless (member format '("text" "json") :test #'string=)
+      (format *error-output* "Error: --format must be text or json~%")
+      (clingon:exit 1))
+    (if (string= format "json")
+        (handler-case
+            (let ((result (lint-source text :rules rules :recovery recovery)))
+              (format *standard-output* "~a~%" (lint-diagnostics-json result))
+              (unless (getf result :ok)
+                (clingon:exit 1)))
+          (error (c)
+            (format *error-output* "Error: ~a~%" c)
+            (clingon:exit 1)))
+        ;; text mode preserves the legacy duplicate report exactly when
+        ;; the default rule set (or duplicate-top-level alone) is used.
+        (if (or (null rules) (equal rules '("duplicate-top-level")))
+            (let ((groups (duplicate-top-level-forms text :recovery recovery)))
+              (if groups
+                  (progn
+                    (dolist (g groups)
+                      (format *error-output* "Duplicate top-level forms at offsets ~{~a~^, ~}:~%" g)
+                      (dolist (off g)
+                        (multiple-value-bind (l c)
+                            (cl-toolkit-ast::offset-to-line-col text off)
+                          (format *error-output* "  [line ~a, col ~a]~%" l c))))
+                    (clingon:exit 1))
+                  (format *standard-output* "No duplicate top-level forms.~%")))
+            (handler-case
+                (let* ((result (lint-source text :rules rules :recovery recovery))
+                       (diagnostics (getf result :diagnostics)))
+                  (if diagnostics
+                      (progn
+                        (dolist (d diagnostics)
+                          (format *error-output* "[~a] ~a (line ~a, col ~a): ~a~%"
+                                  (getf d :severity) (getf d :rule)
+                                  (getf d :line) (getf d :col)
+                                  (getf d :message)))
+                        (clingon:exit 1))
+                      (format *standard-output* "No lint findings.~%")))
+              (error (c)
+                (format *error-output* "Error: ~a~%" c)
+                (clingon:exit 1)))))))
 
 (defun lint/command ()
   (clingon:make-command
    :name "lint"
-   :usage "(-f FILE | --code CODE)"
-   :description "Flag duplicate identical top-level forms"
+   :usage "(-f FILE | --code CODE) [--format text|json] [--rules A,B]"
+   :description "Lint source with stable rule ids and machine-readable output"
    :options (list
              (clingon:make-option :string :long-name "file" :short-name #\f
                                   :description "File to lint" :key :file)
              (clingon:make-option :string :long-name "code"
                                   :description "Inline code" :key :code)
+             (clingon:make-option :string :long-name "format"
+                                  :description "Output format: text (default) or json"
+                                  :key :format)
+             (clingon:make-option :string :long-name "rules"
+                                  :description "Comma-separated lint rule ids (default: all registered)"
+                                  :key :rules)
              (make-recovery-option))
    :handler #'lint/handler))
 
