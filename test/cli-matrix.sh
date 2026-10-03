@@ -134,6 +134,8 @@ mk redef.lisp '(defun f () 1)
 (defun f () 2)
 '
 check lint-redefined 0 sh -c "$BIN lint -f '$TMP/redef.lisp' --format json --rules redefined-top-level | grep -q redefined-top-level"
+check lint-empty-operator 0 sh -c "$BIN lint --code '(f (() ))' --format json --rules empty-operator | grep -q empty-operator"
+check lint-eval-hazard 0 sh -c "$BIN lint --code '(eval x)' --format json --rules eval-hazard | grep -q eval-hazard"
 check lint-sharp-underscore 0 sh -c "$BIN lint --code '(list 1 #_2 3)' --format json --rules sharp-underscore-dispatch | grep -q sharp-underscore-dispatch"
 check lint-skipped-branch 0 sh -c "$BIN lint --code '(list #-other-lisp #\Name-Only)' --format json --rules skipped-conditional-branch | grep -q skipped-conditional-branch"
 check diff-same 0 "$BIN" diff-forms -f "$TMP/base.lisp" --name alpha

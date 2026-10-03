@@ -379,6 +379,28 @@
                              :rules '("redefined-top-level"))))
     (is (getf result :ok))))
 
+(test lint-empty-operator
+  ;; (()) calls NIL: flag it
+  (let ((result (lint-source "(f (()))"
+                             :rules '("empty-operator"))))
+    (is (null (getf result :ok)))
+    (is (= 1 (length (getf result :diagnostics))))
+    (let ((d (first (getf result :diagnostics))))
+      (is (string= "empty-operator" (getf d :rule)))
+      (is (eq :warning (getf d :severity)))))
+  ;; NIL as a value is ordinary: no findings
+  (dolist (code (list "(f ())" "()" "'(())" "(quote (()))"))
+    (let ((result (lint-source code :rules '("empty-operator"))))
+      (is (getf result :ok) "code=~s should be clean" code))))
+
+(test lint-eval-hazard
+  (dolist (code (list "(eval x)" "#.(foo)" "(EVAL x)"))
+    (let ((result (lint-source code :rules '("eval-hazard"))))
+      (is (null (getf result :ok)) "code=~s should flag" code)
+      (is (= 1 (length (getf result :diagnostics))))))
+  (let ((result (lint-source "(defun f () 1)" :rules '("eval-hazard"))))
+    (is (getf result :ok))))
+
 (test lint-skipped-conditional-branch
   (let ((result (lint-source "(list #-other-lisp #\\Name-Only-That-Lisp-Knows)"
                              :rules '("skipped-conditional-branch"))))

@@ -880,6 +880,77 @@
 
 (register-lint-rule "redefined-top-level" #'lint-redefined-top-level
                     :doc "Same (head . name) defined twice with different bodies.")
+
+(defun lint-quoted-ancestor-p (ancestors)
+  "True when any of ANCESTORS is a (QUOTE ...) form, in which case the
+   node under inspection is data, not code."
+  (dolist (ancestor ancestors nil)
+    (when (and (node-list-p ancestor)
+               (node-children ancestor)
+               (nodep (first (node-children ancestor)))
+               (eq (node-type (first (node-children ancestor))) :symbol)
+               (string-equal (node-name (first (node-children ancestor))) "quote"))
+      (return t))))
+
+(defun lint-empty-operator (text ast)
+  "Flag an empty list in operator position: `(())` calls NIL and will
+   signal at runtime. Quoted data is excluded, as is `()` anywhere
+   else (NIL as a value is ordinary)."
+  (let ((diagnostics nil))
+    (labels ((walk (node ancestors)
+               (when (nodep node)
+                 (when (and (node-list-p node)
+                            (null (node-children node))
+                            ;; a grandparent must exist: a bare top-level
+                            ;; () is NIL the value, not NIL the operator
+                            (rest ancestors)
+                            (node-list-p (first ancestors))
+                            (eq node (first (node-children (first ancestors))))
+                            (not (lint-quoted-ancestor-p ancestors)))
+                   (push (diagnostic-for-node
+                          text node
+                          :rule "empty-operator"
+                          :severity :warning
+                          :message "Empty list in operator position calls NIL and will signal at runtime."
+                          :fix "Quote the value, supply the intended operator, or remove the call.")
+                         diagnostics))
+                 (dolist (child (node-children node))
+                   (walk child (cons node ancestors))))))
+      (walk ast nil))
+    (sort-lint-diagnostics diagnostics)))
+
+(defun lint-eval-hazard (text ast)
+  "Flag `#.` read-time evaluation and `(eval ...)` calls. Both execute
+   code from data; legitimate uses exist, so this is a warning the
+   user opts into via --rules, never an error."
+  (let ((diagnostics nil))
+    (walk-lint-nodes
+     ast
+     (lambda (node)
+       (when (and (node-list-p node)
+                  (node-children node)
+                  (nodep (first (node-children node)))
+                  (eq (node-type (first (node-children node))) :symbol)
+                  (string-equal (node-name (first (node-children node))) "eval")
+                  (node-start node) (node-end node))
+         (let ((source (ignore-errors (node-source-text text node))))
+           (when (stringp source)
+             (push (diagnostic-for-node
+                    text node
+                    :rule "eval-hazard"
+                    :severity :warning
+                    :message (if (and (plusp (length source))
+                                      (char= (char source 0) #\#))
+                                 "Read-time evaluation (`#.`) executes code while reading."
+                                 "A call to EVAL executes code from data at runtime.")
+                    :fix "Prefer a plain form or a computed value; keep eval-shaped code auditable.")
+                   diagnostics))))))
+    (sort-lint-diagnostics diagnostics)))
+
+(register-lint-rule "empty-operator" #'lint-empty-operator
+                    :doc "An empty list in operator position calls NIL.")
+(register-lint-rule "eval-hazard" #'lint-eval-hazard
+                    :doc "Read-time (`#.`) and runtime (EVAL) code execution.")
 (defun find-forms-containing (text snippet &key recovery)
   "Return a list of (index node) pairs for top-level forms in TEXT
    whose source contains SNIPPET. Empty snippets match everything,
