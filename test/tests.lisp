@@ -726,6 +726,95 @@
                         (check-source-spans bogus "hi"))
                 :test #'string=))))
 
+;;; --- Formatter round-trip ---
+;;;;
+;;; Formatting may move code around but must never change what the code
+;;; means: the result has to parse, parse to the same structure, and be a
+;;; fixed point (formatting twice changes nothing). Checked over the whole
+;;; corpus for both the minimal and the canonical formatter, and pinned
+;;; here so a later change cannot quietly break it.
+
+(defun structural-shape (node)
+  "Structure of NODE ignoring positions: type, name, value, children."
+  (list (node-type node)
+        (node-name node)
+        (node-value node)
+        (mapcar #'structural-shape (node-children node))))
+
+(defparameter *format-samples*
+  (list "(defun f (a b) (+ a b))"
+        "(a . b)"
+        "(a . (b c))"
+        "(a . nil)"
+        "#()"
+        "#(1 2 3)"
+        "#*101"
+        "\"a \\\"b\""
+        "(quote x)"
+        "`(a ,b ,@c)"
+        "#+sbcl 1"
+        "#-no-such-feature 2"
+        "(let ((x 1) (y 2))(+ x y))"
+        "(if a b c d e)"
+        "(cond ((a) 1) ((b) 2) (t 3))"
+        "(lambda (x) body)"
+        "(do ((i 0 (1+ i))) ((= i 10)))"
+        "; just a comment"
+        "(defun broken ("
+        "|weird sym|"
+        "(f #'g #' #'x)"
+        "(a .5 b 5. .c)"
+        "(a #xFF #b101 1/2)"))
+
+(defun format-round-trip-ok-p (text formatter)
+  (let* ((ast (parse-lisp-source text)))
+    (cond ((eq (node-type ast) :error) t)
+          (t
+           (let* ((once (funcall formatter text))
+                  (ast2 (parse-lisp-source once))
+                  (twice (funcall formatter once)))
+             (and (stringp once)
+                  (not (eq (node-type ast2) :error))
+                  (equal (structural-shape ast) (structural-shape ast2))
+                  (stringp twice)
+                  (string= once twice)))))))
+
+(test format-preserves-structure-and-is-idempotent
+  (dolist (text *format-samples*)
+    (is (format-round-trip-ok-p text #'format-source)
+        (format nil "canonical format changed the meaning of ~s" text))
+    (is (format-round-trip-ok-p text #'format-minimal)
+        (format nil "minimal format changed the meaning of ~s" text))))
+
+(defparameter *literal-samples*
+  ;; built with CODE so the escapes under test are unambiguous
+  (list (format nil "~a\tab~a~a" (code-char 34) (code-char 34) (code-char 34))
+        (format nil "~aquote ~a~a inside~a" (code-char 34) (code-char 92) (code-char 34) (code-char 34))
+        (format nil "~a~a Space~a" (code-char 35) (code-char 92) (code-char 34))
+        (format nil "~a~a(~a" (code-char 35) (code-char 92) (code-char 34))
+        "'.5"
+        "'.a"
+        "1/2"
+        "#xFF"
+        "#b101"
+        "-3/4"))
+
+(test format-keeps-escapes-and-literals-intact
+  ;; a formatter may reflow code, but it must never rewrite what a
+  ;; literal means -- an escape that decodes differently is a bug that
+  ;; only shows up downstream
+  (dolist (text *literal-samples*)
+    (let* ((ast (parse-lisp-source text))
+           (once (format-source text))
+           (ast2 (parse-lisp-source once)))
+      (is (eql (node-type ast) (node-type ast2))
+          (format nil "formatting ~s changed its type" text))
+      (is (equal (structural-shape ast) (structural-shape ast2))
+          (format nil "formatting ~s changed it to ~s" text once))
+      (is (equal (node-value (first (node-children ast2)))
+                 (node-value (first (node-children ast))))
+          (format nil "formatting ~s changed the literal's value" text)))))
+
 (test empty-bit-vector-has-no-zero-width-child
   (let* ((ast (parse-lisp-source "#*"))
          (node (first (node-children ast)))

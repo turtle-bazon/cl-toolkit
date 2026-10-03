@@ -78,6 +78,7 @@
    #:list-top-level
    #:analyze-balance
    #:format-source
+   #:format-minimal
    #:node-to-json
    #:node-to-json-string
    #:delete-form-at
