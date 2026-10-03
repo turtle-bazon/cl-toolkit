@@ -5,6 +5,59 @@ marked `BREAKING:`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Numbers follow the reader.** Only the `e` exponent marker was
+  recognized, so `1d0`, `1f0`, `1s0` and `1l0` read as symbols, and
+  every radix integer read as a symbol (`#xFF` was the symbol `#xFF`,
+  not 255). Radix prefixes now parse as integers in any base 2-36 with
+  an optional sign, and a prefix outside a number is a hard error, so
+  `#xFFg` and `#10r` fail instead of degrading into a `#` symbol. The
+  marker letter picks the float format (`e`/`f`/`s` follow
+  `*read-default-float-format*`, `d`/`l` force double), so `1e0` is
+  single and `1d0` is double. Ratios (`3/4`), leading-dot floats
+  (`.5`, `.5e2`) and trailing-dot integers (`5.`) are numbers again,
+  while `3/-4`, `3.5/2` and `3/0` keep the reader's spelling.
+- **Dotted pairs have real structure.** `(a . (b))` is the two-list
+  `(a b)` rather than four children with a `.` in the middle;
+  `(a . nil)` and `(a . (b . nil))` collapse as the reader collapses
+  them; `(. b)`, `(a .)`, `(a . b . c)` and `#(a . b)` are rejected.
+- **Symbol escapes are decoded.** `node-name` kept the backslash, so
+  `some\!thing` was named `"some\!thing"` and could never be matched
+  by `find-top-level-by-name` or `rename`. Names now hold what the
+  reader sees, bar segments keep their bars, and an escaped colon
+  (`foo\:bar`) no longer splits as a package prefix.
+- **`#()` reads as an empty vector.** It never parsed as a vector --
+  it fell through to a `#` symbol plus an empty list, which read as
+  success with the wrong shape -- and once `#(` was barred from the
+  symbol rule it began rejecting real files.
+- **A lone `.` is not a symbol.** The reader signals an error for it;
+  `.b`, `..` and `a.b` remain symbols.
+- **`cl-toolkit parse FILE` parses FILE.** The positional argument
+  shown in `parse --help` was dropped on the floor, so the command
+  printed an empty AST and exited 0 -- indistinguishable from a
+  successful parse of an empty file. A bad path now fails like `-f`,
+  and two bare arguments are a usage error.
+- **List parsing no longer parses every list twice.** Splitting
+  `list-form` into an `or` of a dotted and a proper rule made the
+  dotted alternative consume a whole list, fail on the missing dot,
+  and hand the list to the proper rule to re-read; nested lists paid
+  that per level. `quicklisp/asdf.lisp` went from not finishing in
+  45 s to 1.7 s, the same as before the split.
+
+### Known divergences
+
+- A dotted tail followed by a `#-`/`#+` form that the reader never
+  reads (`(f (a b . #-no-such-feature (x y) #+no-such-feature ()))`)
+  is read by SBCL as if the vanished branch contents were spliced into
+  the enclosing list. cl-toolkit rejects it, which is what the
+  standard's grammar for `.` requires. Two corpus files rely on it.
+- Rejecting an invalid file can take far longer than accepting it,
+  because a list that fails to parse is re-read by the dotted-list
+  rule before the failure is reported. The largest case measured,
+  a 174 KB file that neither parser accepts, takes about 25 s to
+  reject.
+
 ### Added
 
 - **Lint as a rule registry with stable machine output.** Diagnostics
