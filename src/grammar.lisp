@@ -159,14 +159,29 @@
 (defrule not-symbol-tail-char
     (! symbol-tail-char))
 
+;;; Exponent marker with its value: e/E/f/F/s/S mean the default
+;;; (single) float format, d/D/l/L mean double. The marker letter is
+;;; kept (not just the value) so the result coerces to the same float
+;;; format the reader produces: 1e0 is single, 1d0 is double.
 (defrule float-exponent
-    (and (or #\e #\E) (? (or #\+ #\-)) (+ digit))
+    (and (or #\e #\E #\d #\D #\f #\F #\s #\S #\l #\L)
+         (? (or #\+ #\-)) (+ digit))
   (:lambda (exp)
-    (destructuring-bind (e sign digits) exp
-      (declare (ignore e))
+    (destructuring-bind (marker sign digits) exp
       (let ((sign-str (if sign (string sign) ""))
             (digits-str (esrap:text digits)))
-        (parse-integer (concatenate 'string sign-str digits-str))))))
+        (cons marker
+              (parse-integer (concatenate 'string sign-str digits-str)))))))
+
+(defun float-with-marker (rational-value marker)
+  "Coerce exact RATIONAL-VALUE to the float format MARKER selects:
+   d/D/l/L give double, everything else (e/f/s, or absent) gives
+   single — matching *read-default-float-format*. MARKER is the
+   exponent letter as a one-character string."
+  (let ((letter (if (characterp marker) marker (char marker 0))))
+    (if (member letter '(#\d #\D #\l #\L))
+        (coerce rational-value 'double-float)
+        (coerce rational-value 'single-float))))
 
 (defrule float-body
     (and integer-part #\. (+ digit) (? float-exponent) not-symbol-tail-char)
@@ -179,15 +194,129 @@
                               (expt 10 (length frac)))
                            0))
              (base (+ int frac-val))
-             (exponent (if exp exp 0)))
-        (float (* base (expt 10 exponent)) 1.0d0)))))
+             (exponent (if exp (cdr exp) 0)))
+        (float-with-marker (* base (expt 10 exponent))
+                           (if exp (car exp) #\e))))))
 
 (defrule int-with-exponent
     (and integer-part float-exponent not-symbol-tail-char)
   (:lambda (result)
     (destructuring-bind (int exp _) result
       (declare (ignore _))
-      (float (* int (expt 10 exp)) 1.0d0))))
+      (float-with-marker (* int (expt 10 (cdr exp))) (car exp)))))
+
+;;; 5.e3 is a float (the reader accepts an empty fraction with an
+;;; exponent); 5. alone is an integer (see trailing-dot-integer).
+(defrule dot-exponent-float
+    (and integer-part #\. float-exponent not-symbol-tail-char)
+  (:lambda (result)
+    (destructuring-bind (int dot exp _) result
+      (declare (ignore dot _))
+      (float-with-marker (* int (expt 10 (cdr exp))) (car exp)))))
+
+;;; .5 reads as 0.5, with the same marker rule for .5e2 and .5d0.
+(defrule leading-dot-float
+    (and #\. (+ digit) (? float-exponent) not-symbol-tail-char)
+  (:lambda (result)
+    (destructuring-bind (dot digits exp _) result
+      (declare (ignore dot _))
+      (let* ((frac-text (map 'string #'identity digits))
+             (frac (/ (parse-integer frac-text)
+                      (expt 10 (length frac-text))))
+             (exponent (if exp (cdr exp) 0)))
+        (float-with-marker (* frac (expt 10 exponent))
+                           (if exp (car exp) #\e))))))
+
+;;; 5. reads as the integer 5. The digit guard keeps 5.5 and 5.e3 for
+;;; the float rules above.
+(defrule trailing-dot-integer
+    (and integer-part #\. (! digit) not-symbol-tail-char)
+  (:lambda (result)
+    (destructuring-bind (int dot guard _) result
+      (declare (ignore dot guard _))
+      int)))
+
+(defun scan-ratio (text position end)
+  "esrap terminal: an integer ratio NUM/DEN with nonzero DEN.
+   Returns (values ratio new-pos nil), or failure when the shape is
+   wrong or the denominator is zero (the reader signals there too)."
+  (let ((i position))
+    (let ((nstart i))
+      (loop while (and (< i end) (digit-char-p (char text i))) do (incf i))
+      (when (and (> i nstart)
+                 (< i end) (char= (char text i) #\/))
+        (let ((num (parse-integer (subseq text nstart i)))
+              (dstart (1+ i)))
+          (setf i dstart)
+          (loop while (and (< i end) (digit-char-p (char text i))) do (incf i))
+          (when (> i dstart)
+            (let ((den (parse-integer (subseq text dstart i))))
+              (unless (zerop den)
+                (return-from scan-ratio (values (/ num den) i nil)))))))))
+    (values nil position nil))
+
+(defrule ratio-number
+    (and (function scan-ratio) not-symbol-tail-char)
+  (:lambda (result)
+    (destructuring-bind (val guard) result
+      (declare (ignore guard))
+      val)))
+
+(defun scan-radix-integer (text position end)
+  "esrap terminal: #b/#o/#x/#Nr integer with optional sign.
+   Returns (values int new-pos nil), or failure. Validity (digit
+   values below the base, base 2-36, at least one digit) is checked
+   here so #xFFg fails instead of silently stopping at FF."
+  (let ((i position))
+    (when (and (< i end) (char= (char text i) #\#))
+      (incf i)
+      (let ((base nil))
+        (cond ((and (< i end) (member (char text i) '(#\b #\B)))
+               (setf base 2) (incf i))
+              ((and (< i end) (member (char text i) '(#\o #\O)))
+               (setf base 8) (incf i))
+              ((and (< i end) (member (char text i) '(#\x #\X)))
+               (setf base 16) (incf i))
+              (t
+               (let ((j i))
+                 (loop while (and (< j end) (digit-char-p (char text j)))
+                       do (incf j))
+                 (when (and (> j i) (< j end)
+                            (member (char text j) '(#\r #\R)))
+                   (let ((b (parse-integer (subseq text i j))))
+                     (when (<= 2 b 36)
+                       (setf base b)
+                       (setf i (1+ j))))))))
+        (when base
+          (let ((neg nil))
+            (when (and (< i end) (member (char text i) '(#\+ #\-)))
+              (setf neg (char= (char text i) #\-))
+              (incf i))
+            (let ((dstart i))
+              (loop while (and (< i end)
+                               (let ((v (digit-char-p (char text i) base)))
+                                 (and v (< v base))))
+                    do (incf i))
+              (when (> i dstart)
+                (let ((val (parse-integer (subseq text dstart i)
+                                          :radix base)))
+                  (return-from scan-radix-integer
+                    (values (if neg (- val) val) i nil)))))))))
+    (values nil position nil)))
+
+(defrule radix-integer
+    (and (function scan-radix-integer) not-symbol-tail-char)
+  (:lambda (result)
+    (destructuring-bind (val guard) result
+      (declare (ignore guard))
+      val)))
+
+;;; A symbol may not start with a radix prefix: #b/#o/#x/#Nr always
+;;; means integer-or-bust, so #xFFg and #10r must fail outright instead
+;;; of degrading into a "#" symbol plus trailing forms.
+(defrule radix-prefix
+    (and "#" (or (or "b" "B" "o" "O" "x" "X")
+                 (and (+ digit) (or "r" "R")))))
 
 (defrule plain-integer
     (and integer-part not-symbol-tail-char)
@@ -195,7 +324,14 @@
     (first result)))
 
 (defrule number
-    (and (? sign-char) (or float-body int-with-exponent plain-integer))
+    (and (? sign-char) (or radix-integer
+                           float-body
+                           dot-exponent-float
+                           int-with-exponent
+                           leading-dot-float
+                           trailing-dot-integer
+                           ratio-number
+                           plain-integer))
   (:lambda (result &bounds start end)
     (destructuring-bind (sign val) result
       (make-node :number
@@ -438,30 +574,80 @@
     ;; form became a second top-level form.
     (or "#+" "#-"))
 
+(defun unescape-symbol-text (text)
+  "Drop the backslash of every \\x escape, which is what the reader
+   does: the name of some\\!thing is \"SOME!THING\". Escapes never occur
+   inside a |...| bar segment, whose contents are already literal."
+  (let ((out (make-string-output-stream))
+        (i 0)
+        (n (length text))
+        (bar nil))
+    (loop while (< i n) do
+      (let ((c (char text i)))
+        (cond (bar
+               (write-char c out)
+               (when (char= c #\|) (setf bar nil)))
+              ((char= c #\|)
+               (write-char c out)
+               (setf bar t))
+              ((and (char= c #\\) (< (1+ i) n))
+               (write-char (char text (1+ i)) out)
+               (incf i))
+              (t (write-char c out))))
+      (incf i))
+    (get-output-stream-string out)))
+
+(defun unescaped-colon-position (text)
+  "Index of the last colon that really separates package from name, or
+   NIL. A \\: is part of the name, and so is a colon inside |...|."
+  (let ((i 0)
+        (n (length text))
+        (bar nil)
+        (found nil))
+    (loop while (< i n) do
+      (let ((c (char text i)))
+        (cond ((and (char= c #\\) (< (1+ i) n)) (incf i))
+              ((char= c #\|) (setf bar (not bar)))
+              ((and (not bar) (char= c #\:)) (setf found i))))
+      (incf i))
+    found))
+
 (defrule symbol
     ;; A "#\" prefix always means char-literal-or-bust: without this
     ;; guard an invalid "#\AB" would degrade into a "#" symbol plus
     ;; trailing forms instead of failing the enclosing form.
+    ;; Likewise "#(" always means vector-or-bust: without this guard a
+    ;; broken "#(a . b)" degrades into a "#" symbol plus a list instead
+    ;; of failing, disagreeing with the reader. And a radix prefix
+    ;; always means integer-or-bust, so #xFFg cannot degrade either.
     (and (! "#\\")
+         (! "#(")
+         (! radix-prefix)
          (! reader-conditional-prefix)
          symbol-head
          (* symbol-tail-char))
   (:lambda (chars &bounds start end)
     (let ((full (esrap:text chars)))
-      ;; Split on the LAST colon so "foo::bar" yields package "foo",
-      ;; name "bar" (not ":bar"). Leading ":" means keyword package.
-      (let ((colon (position #\: full :from-end t)))
+      ;; Split on the LAST unescaped colon so "foo::bar" yields package
+      ;; "foo", name "bar" (not ":bar"), while "foo\\:bar" stays a
+      ;; single symbol named "foo:bar". Leading ":" means keyword.
+      (let ((colon (unescaped-colon-position full)))
         (if colon
             (let ((raw-pkg (subseq full 0 colon))
                   (raw-name (subseq full (1+ colon))))
               (make-node :symbol
-                         :name (string-left-trim ":" raw-name)
-                         :package (let ((trimmed (string-trim ":" raw-pkg)))
+                         :name (string-left-trim ":"
+                                                 (unescape-symbol-text raw-name))
+                         :package (let ((trimmed (string-trim ":"
+                                                           (unescape-symbol-text
+                                                            raw-pkg))))
                                     (if (> (length trimmed) 0)
                                         trimmed
                                         "KEYWORD"))
                          :start start :end end))
-            (make-node :symbol :name full :start start :end end))))))
+            (make-node :symbol
+                       :name (unescape-symbol-text full)
+                       :start start :end end))))))
 
 ;;; --- Compound rules ---
 
@@ -473,21 +659,80 @@
 ;;; |{A}B|, and "(let ([x 1]) ...)" does NOT bind x. Treating them as
 ;;; delimiters here would silently disagree with every reader, so they
 ;;; go to `symbol-head-char'/`symbol-tail-char' instead.
-(defrule list-form
-    (and #\( ws (* (and form ws)) ws #\))
+;;;
+;;; Dotted pairs need real structure, not just "dot as another symbol":
+;;; the reader treats (a . (b)) as the two-list (a b), so a flat
+;;; three-child (a DOT (b)) tree silently disagrees about shape. Worse,
+;;; (a . b c) and (a .) must FAIL (the reader rejects them) but a bare
+;;; repetition accepts them. Hence two rules: a proper list whose
+;;; elements can never be a lone dot, and a dotted list with exactly
+;;; one dot before exactly one tail form.
+
+;;; A "." that stands alone: dot followed by a non-constituent, so
+;;; ".5", ".." and ".b" (number/symbol continuations) do not match.
+(defrule dot-form
+    (and #\. (! symbol-tail-char))
+  (:destructure (dot guard &bounds start end)
+    (declare (ignore dot guard))
+    (make-node :symbol :name "." :start start :end end)))
+
+(defrule proper-list-form
+    (and #\( ws (* (and (! dot-form) form ws)) ws #\))
   (:destructure (open ws1 forms-ws ws2 close &bounds start end)
     (declare (ignore open close ws1 ws2))
     (make-node :list
-               :children (mapcar #'first forms-ws)
+               :children (mapcar #'second forms-ws)
                :start start :end end)))
 
-;;; Vector
+(defun dotted-kids-p (kids)
+  "True when KIDS is a non-empty list whose last two elements are a
+   lone dot and NIL, i.e. the reader's proper-list-in-disguise
+   spelling (b . nil)."
+  (and (>= (length kids) 2)
+       (let ((penultimate (nth (- (length kids) 2) kids))
+             (last (car (last kids))))
+         (and (eq (cl-toolkit-ast:node-type penultimate) :symbol)
+              (string= (cl-toolkit-ast::node-name penultimate) ".")
+              (eq (cl-toolkit-ast:node-type last) :symbol)
+              (string-equal (cl-toolkit-ast::node-name last) "nil")))))
+
+(defrule dotted-list-form
+    ;; At least one element must precede the dot: (. b) is not a list.
+    ;; The tail itself must not be a lone dot: (a . .) is rejected by
+    ;; the reader, while (a . .5) and (a . .b) stay legal
+    (and #\( ws (+ (and (! dot-form) form ws)) ws dot-form ws
+         (! dot-form) form ws #\))
+  (:destructure (open ws1 prefixes ws2 dot ws3 tail-guard tail ws4 close
+                 &bounds start end)
+    (declare (ignore open close ws1 ws2 ws3 ws4 tail-guard))
+    (let ((prefix-kids (mapcar #'second prefixes)))
+      (make-node :list
+                 :children (if (eq (cl-toolkit-ast:node-type tail) :list)
+                               ;; (a . (b c)) is the three-list (a b c):
+                               ;; splice the tail's children in place, and
+                               ;; drop a trailing ". nil" because
+                               ;; (a . (b . nil)) is just (a b)
+                               (let ((kids (cl-toolkit-ast:node-children tail)))
+                                 (append prefix-kids
+                                         (if (dotted-kids-p kids)
+                                             (butlast kids 2)
+                                             kids)))
+                               ;; (a . b) keeps the dot explicit, as before
+                               (append prefix-kids (list dot tail)))
+                 :start start :end end))))
+
+(defrule list-form
+    (or dotted-list-form proper-list-form))
+
+;;; Vector. Elements can never be a lone dot: the reader rejects
+;;; #(a . b), so the repetition excludes it the same way proper lists do.
 (defrule vector-form
-    (and "#(" ws form (* (and ws form)) ws #\))
-  (:destructure (open ws1 first rest ws2 close &bounds start end)
-    (declare (ignore open close ws1 ws2))
+    (and "#(" ws (! dot-form) form (* (and ws (! dot-form) form)) ws #\))
+  (:destructure (open ws1 first-guard first rest ws2 close
+                 &bounds start end)
+    (declare (ignore open close ws1 ws2 first-guard))
     (make-node :vector
-               :children (cons first (mapcar #'second rest))
+               :children (cons first (mapcar #'third rest))
                :start start :end end)))
 
 ;;; Quote/sharp-reader macros

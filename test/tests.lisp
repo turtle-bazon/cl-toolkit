@@ -91,6 +91,75 @@
     (is (eq :number (node-type num)))
     (is (= 100000.0d0 (node-value num)))))
 
+;;; Number syntax follows the CL reader exactly: ratios, radix
+;;; prefixes, leading-dot floats, trailing-dot integers and the
+;;; float-format marker letter all have to round-trip.
+
+(defun parse-single-number (text)
+  (let* ((ast (parse-lisp-source text))
+         (node (first (node-children ast))))
+    (unless (eq (node-type node) :number)
+      (error "~a did not parse as a number (got ~s)" text (node-type node)))
+    node))
+
+(defun rejects-as-number (text)
+  (let ((ast (parse-lisp-source text)))
+    (or (eq (node-type ast) :error)
+        (not (eq (node-type (first (node-children ast))) :number)))))
+
+(test ratio-is-number
+  (is (= 3/4 (node-value (parse-single-number "3/4"))))
+  (is (= -3/4 (node-value (parse-single-number "-3/4"))))
+  (is (= 5/2 (node-value (parse-single-number "10/4"))))
+  (is (= 0 (node-value (parse-single-number "0/5")))))
+
+(test radix-prefixed-integer-is-number
+  (is (= 255 (node-value (parse-single-number "#xFF"))))
+  (is (= 183 (node-value (parse-single-number "#xb7"))))
+  (is (= 5 (node-value (parse-single-number "#b101"))))
+  (is (= 15 (node-value (parse-single-number "#o17"))))
+  (is (= 5 (node-value (parse-single-number "#2r101"))))
+  (is (= 1295 (node-value (parse-single-number "#36rZZ"))))
+  (is (= 255 (node-value (parse-single-number "#x+FF"))))
+  (is (= 255 (node-value (parse-single-number "#16rff"))))
+  (is (= -255 (node-value (parse-single-number "#x-FF"))))
+  (is (= -5 (node-value (parse-single-number "#10r-5")))))
+
+(test bad-radix-prefix-is-rejected
+  (dolist (text '("#xFFg" "#b12" "#o89" "#2r2" "#37r0" "#x" "#b" "#10r"
+                  "3/0"))
+    (is (rejects-as-number text) (format nil "~a must not parse as a number" text))))
+
+(test leading-and-trailing-dot-numbers
+  (is (= 0.5 (node-value (parse-single-number ".5"))))
+  (is (= 50.0 (node-value (parse-single-number ".5e2"))))
+  (is (= 5000.0 (node-value (parse-single-number "5.e3"))))
+  (is (= 5 (node-value (parse-single-number "5.")))))
+
+(test float-marker-picks-float-format
+  ;; The reader's default is single; d/l force double, e/f/s follow
+  ;; the default. e is NOT an alias for d.
+  (is (typep (node-value (parse-single-number "1.5")) 'single-float))
+  (is (typep (node-value (parse-single-number "1e0")) 'single-float))
+  (is (typep (node-value (parse-single-number "1f0")) 'single-float))
+  (is (typep (node-value (parse-single-number "1s0")) 'single-float))
+  (is (typep (node-value (parse-single-number "1d0")) 'double-float))
+  (is (typep (node-value (parse-single-number "1D0")) 'double-float))
+  (is (typep (node-value (parse-single-number "1l0")) 'double-float))
+  (is (typep (node-value (parse-single-number "1.5d0")) 'double-float))
+  (is (typep (node-value (parse-single-number "1.5l0")) 'double-float))
+  (is (typep (node-value (parse-single-number "1.5f0")) 'single-float))
+  (is (typep (node-value (parse-single-number "1.5s0")) 'single-float))
+  (is (typep (node-value (parse-single-number ".5d0")) 'double-float))
+  (is (= 0.001d0 (node-value (parse-single-number "1d-3"))))
+  (is (= 1.0e10 (node-value (parse-single-number "1e10")))))
+
+(test slash-is-symbol-when-not-a-ratio
+  (dolist (text '("3/-4" "-3/-4" "3.5/2"))
+    (let ((node (first (node-children (parse-lisp-source text)))))
+      (is (eq :symbol (node-type node)))
+      (is (string= text (node-name node))))))
+
 (test minus-operator-stays-symbol
   (let* ((ast (parse-lisp-source "(- 5 3)"))
          (form (first (node-children ast))))
@@ -516,6 +585,56 @@
     (is (eq :list (node-type form)))
     (is (= 3 (length (node-children form))))))
 
+;;; The reader splices a dotted tail that is itself a list, so
+;;; (a . (b c)) is the three-element list (a b c) — not four children
+;;; with a "." and a sub-list in the middle.
+
+(defun form-shape (ast)
+  (mapcar (lambda (child)
+            (case (node-type child)
+              (:list :list)
+              (:symbol (node-name child))
+              ((:number :string :character) (node-type child))
+              (t (node-type child))))
+          (node-children (first (node-children ast)))))
+
+(defun parse-rejects (text)
+  (let ((ast (parse-lisp-source text)))
+    (or (eq (node-type ast) :error)
+        (eq (node-type (first (node-children ast))) :error))))
+
+(test dotted-tail-that-is-a-list-is-spliced
+  (is (equal '("a" "b") (form-shape (parse-lisp-source "(a . (b))"))))
+  (is (equal '("a" "b" "c") (form-shape (parse-lisp-source "(a . (b c))"))))
+  (is (equal '("a" "b" "c") (form-shape (parse-lisp-source "(a b . (c))"))))
+  (is (equal '("a" "b" "c" "d")
+             (form-shape (parse-lisp-source "(a b . (c d))"))))
+  (is (equal '("a" "b") (form-shape (parse-lisp-source "(a . (b . nil))")))))
+
+(test nested-dotted-tail-is-spliced
+  (let* ((ast (parse-lisp-source "(f (a . (b)) . (c))"))
+         (children (node-children (first (node-children ast))))
+         (nested (second children)))
+    (is (= 3 (length children)))
+    (is (eq :list (node-type nested)))
+    (is (equal '("a" "b") (mapcar #'node-name (node-children nested))))
+    (is (string= "c" (node-name (third children))))))
+
+(test malformed-dotted-forms-are-rejected
+  (dolist (text '("(. b)" "(a .)" "(a . . b)" "(a . b . c)"
+                  "(a b . )" "(.)"))
+    (is (parse-rejects text)
+        (format nil "~a must be rejected like the reader rejects it" text))))
+
+(test dot-inside-vector-is-rejected
+  (dolist (text '("#(a . b)" "#(a b . c)" "#(. b)"))
+    (is (parse-rejects text)
+        (format nil "~a must be rejected like the reader rejects it" text))))
+
+(test vector-open-is-never-a-symbol
+  (dolist (text '("#(1 2)" "#(a)" "#(a b)"))
+    (is (not (parse-rejects text)))))
+
 (test package-split-double-colon
   (let* ((ast (parse-lisp-source "foo::bar"))
          (sym (first (node-children ast))))
@@ -726,10 +845,26 @@
   (is (string= "BIT-VECTOR" (node-name (first (node-children (first (top-forms-of "#*101"))))))))
 
 (test symbol-escapes-and-bars
-  (is (string= "\\a" (node-name (first (top-forms-of "\\a")))))
+  ;; the reader drops the backslash of an escape, so node-name must
+  ;; hold the name the reader sees -- otherwise find-top-level-by-name
+  ;; and rename can never match a symbol that needed escaping
+  (is (string= "a" (node-name (first (top-forms-of "\\a")))))
+  (is (string= "some!thing" (node-name (first (top-forms-of "some\\!thing")))))
+  (is (string= "(paren)" (node-name (first (top-forms-of "\\(paren\\)")))))
+  (is (string= "a\\b" (node-name (first (top-forms-of "a\\\\b")))))
   (let ((kids (node-children (first-form-of "(foo |a b| bar)"))))
     (is (= 3 (length kids)))
     (is (string= "|a b|" (node-name (second kids)))))
+  ;; a bar segment keeps its bars and its colons are not separators
+  (is (string= "|a b|" (node-name (first (top-forms-of "|a b|")))))
+  (is (string= "|x:y|" (node-name (first (top-forms-of "|x:y|")))))
+  ;; an escaped colon is part of the name, never a package separator
+  (let ((sym (first (top-forms-of "foo\\:bar"))))
+    (is (string= "foo:bar" (node-name sym)))
+    (is (null (node-package sym))))
+  (let ((sym (first (top-forms-of "foo::bar"))))
+    (is (string= "bar" (node-name sym)))
+    (is (string= "foo" (node-package sym))))
   (let* ((ast (parse-lisp-source "(foo |(a)| bar)"))
          (forms (list-top-level ast)))
     (is (eq :list (node-type ast)))
