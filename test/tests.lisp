@@ -815,6 +815,110 @@
                  (node-value (first (node-children ast))))
           (format nil "formatting ~s changed the literal's value" text)))))
 
+;;; --- Edit-operation properties ---
+;;;;
+;;; An edit may move code but must never corrupt the file. Checked over
+;;; the corpus: replacing a form with its own source text restores the
+;;; file byte for byte; the same edit twice gives the same bytes; a
+;;; successful edit leaves text that still parses with valid spans;
+;;; inserting cannot shorten a file and deleting cannot lengthen one;
+;;; and a batch equals its parts applied one at a time.
+
+(defun edit-source-valid-p (text)
+  (if (zerop (length (string-trim '(#\Space #\Tab #\Newline #\Return) text)))
+      t
+      (let ((ast (parse-lisp-source text)))
+        (and (not (eq (node-type ast) :error))
+             (null (check-source-spans ast text))))))
+
+(defparameter *edit-samples*
+  '("(defun alpha () 1)
+(defun beta (x) (* x 2))
+(setq *y* 3)"
+    "(defpackage #:demo)"
+    "(in-package #:demo)
+(defun only () :one)"
+    "(a . b)"
+    "#()"
+    "(defstruct point (x 0) (y 0))"))
+
+(test replacing-a-form-with-its-own-source-is-a-no-op
+  (dolist (text *edit-samples*)
+    (let* ((ast (parse-lisp-source text))
+           (forms (list-top-level ast))
+           (i (random (length forms)))
+           (node (nth i forms))
+           (code (node-source-text text node))
+           (edit (list :operation :replace-index :index i :code code)))
+      (is (equal text (apply-single-edit text edit))
+          (format nil "replace-index ~a was not reversible in ~s" i text))
+      (is (edit-source-valid-p (apply-single-edit text edit))))))
+
+(test edits-are-deterministic
+  (dolist (text *edit-samples*)
+    (dolist (edit (list (list :operation :replace-index :index 0 :code "(new)")
+                          (list :operation :delete-index :index 0)
+                          (list :operation :insert-after-index :index 0 :code "(x)")
+                          (list :operation :replace-name :name "defun"
+                                :code "(defun renamed () 1)")
+                          (list :operation :delete-name :name "defun")
+                          (list :operation :rename-name :name "beta" :code "gamma")
+                          (list :operation :wrap-name :name "beta"
+                                :open "(wrap" :close "wrap)")
+                          (list :operation :unwrap-name :name "beta")
+                          (list :operation :replace-match :match "defun" :code "(d)")))
+      (let ((once (handler-case (apply-single-edit text edit)
+                    (error (c) (list :refused (type-of c)))))
+            (twice (handler-case (apply-single-edit text edit)
+                     (error (c) (list :refused (type-of c))))))
+        ;; two freshly signalled conditions are never EQ, so compare the
+        ;; refusal by type and only compare bytes when an edit succeeded
+        (is (cond ((and (stringp once) (stringp twice))
+                   (string= once twice))
+                  ((and (consp once) (consp twice))
+                   (eq (getf once :refused) (getf twice :refused)))
+                  (t nil))
+            (format nil "~s was not deterministic on ~s" edit text))
+        (when (stringp once)
+          (is (edit-source-valid-p once)))))))
+
+(test insertions-grow-and-deletions-shrink
+  (let ((text "(defun a () 1)
+(defun b () 2)
+(defun c () 3)"))
+    (dolist (index '(0 1 2))
+      (let ((inserted (apply-single-edit text
+                                        (list :operation :insert-after-index
+                                              :index index :code "(defnew () 0)"))))
+        (is (>= (length inserted) (length text))))
+      (let ((deleted (apply-single-edit text
+                                       (list :operation :delete-index :index index))))
+        (is (<= (length deleted) (length text))))
+      ;; an impossible index must be refused, not silently corrupt
+      (let ((outcome (handler-case
+                        (apply-single-edit text (list :operation :delete-index
+                                                     :index 99))
+                      (error (c) (list :refused (type-of c))))))
+        (is (consp outcome)
+            "an out-of-range delete must be refused, not silently applied")))))
+
+(test deleting-the-only-form-leaves-an-empty-file
+  (let* ((text "(defun only () 1)")
+         (result (apply-single-edit text (list :operation :delete-index :index 0))))
+    (is (string= "" (string-trim '(#\Space #\Tab #\Newline #\Return) result)))
+    (is (edit-source-valid-p result))))
+
+(test batch-edits-match-the-parts-applied-one-at-a-time
+  (let ((text "(defun a () 1)
+(defun b () 2)
+(defun c () 3)"))
+    (let* ((e1 (list :operation :replace-index :index 0 :code "(first)"))
+           (e2 (list :operation :insert-after-index :index 1 :code "(extra)"))
+           (batched (apply-batch-edits text (list e1 e2)))
+           (single (apply-single-edit (apply-single-edit text e1) e2)))
+      (is (string= single batched))
+      (is (edit-source-valid-p batched)))))
+
 (test empty-bit-vector-has-no-zero-width-child
   (let* ((ast (parse-lisp-source "#*"))
          (node (first (node-children ast)))
