@@ -684,6 +684,13 @@
                :children (mapcar #'second forms-ws)
                :start start :end end)))
 
+(defun nil-symbol-p (node)
+  "True for the plain symbol NIL, which the reader treats as the empty
+   list -- but not for #:nil or a NIL shadowed inside a bar segment."
+  (and (eq (cl-toolkit-ast:node-type node) :symbol)
+       (null (cl-toolkit-ast::node-package node))
+       (string-equal (cl-toolkit-ast::node-name node) "nil")))
+
 (defun dotted-kids-p (kids)
   "True when KIDS is a non-empty list whose last two elements are a
    lone dot and NIL, i.e. the reader's proper-list-in-disguise
@@ -693,8 +700,7 @@
              (last (car (last kids))))
          (and (eq (cl-toolkit-ast:node-type penultimate) :symbol)
               (string= (cl-toolkit-ast::node-name penultimate) ".")
-              (eq (cl-toolkit-ast:node-type last) :symbol)
-              (string-equal (cl-toolkit-ast::node-name last) "nil")))))
+              (nil-symbol-p last)))))
 
 (defrule dotted-list-form
     ;; At least one element must precede the dot: (. b) is not a list.
@@ -707,18 +713,22 @@
     (declare (ignore open close ws1 ws2 ws3 ws4 tail-guard))
     (let ((prefix-kids (mapcar #'second prefixes)))
       (make-node :list
-                 :children (if (eq (cl-toolkit-ast:node-type tail) :list)
-                               ;; (a . (b c)) is the three-list (a b c):
-                               ;; splice the tail's children in place, and
-                               ;; drop a trailing ". nil" because
-                               ;; (a . (b . nil)) is just (a b)
-                               (let ((kids (cl-toolkit-ast:node-children tail)))
-                                 (append prefix-kids
-                                         (if (dotted-kids-p kids)
-                                             (butlast kids 2)
-                                             kids)))
-                               ;; (a . b) keeps the dot explicit, as before
-                               (append prefix-kids (list dot tail)))
+                 :children (cond ((eq (cl-toolkit-ast:node-type tail) :list)
+                                   ;; (a . (b c)) is the three-list (a b c):
+                                   ;; splice the tail's children in place,
+                                   ;; and drop a trailing ". nil" because
+                                   ;; (a . (b . nil)) is just (a b)
+                                   (let ((kids (cl-toolkit-ast:node-children tail)))
+                                     (append prefix-kids
+                                             (if (dotted-kids-p kids)
+                                                 (butlast kids 2)
+                                                 kids))))
+                                  ;; NIL is the empty list, so (a . nil)
+                                  ;; is the one-list (a) -- common in
+                                  ;; iteration macros like (for (x . nil) in y)
+                                  ((nil-symbol-p tail) prefix-kids)
+                                  ;; (a . b) keeps the dot explicit, as before
+                                  (t (append prefix-kids (list dot tail))))
                  :start start :end end))))
 
 (defrule list-form

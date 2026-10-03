@@ -609,7 +609,16 @@
   (is (equal '("a" "b" "c") (form-shape (parse-lisp-source "(a b . (c))"))))
   (is (equal '("a" "b" "c" "d")
              (form-shape (parse-lisp-source "(a b . (c d))"))))
-  (is (equal '("a" "b") (form-shape (parse-lisp-source "(a . (b . nil))")))))
+  (is (equal '("a" "b") (form-shape (parse-lisp-source "(a . (b . nil))"))))
+  ;; NIL is the empty list, so a NIL tail just ends the list
+  (is (equal '("col") (form-shape (parse-lisp-source "(col . nil)"))))
+  (is (equal '("a" "b") (form-shape (parse-lisp-source "(a b . nil)"))))
+  (is (equal '("for" :list "in" "y")
+             (form-shape (parse-lisp-source "(for (x . nil) in y)"))))
+  (is (equal '("for" :list "in" "y")
+             (form-shape (parse-lisp-source "(for (x . (nil)) in y)"))))
+  ;; ...but a quoted nil is a form, not the empty list
+  (is (equal '("a" "QUOTE" "nil") (form-shape (parse-lisp-source "(a . 'nil)")))))
 
 (test nested-dotted-tail-is-spliced
   (let* ((ast (parse-lisp-source "(f (a . (b)) . (c))"))
