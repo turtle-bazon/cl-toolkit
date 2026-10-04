@@ -958,6 +958,56 @@
         (when close
           (subseq report idx (1+ close)))))))
 
+(defun dotted-tail-conditional-site (text lo offset)
+  "Position of a dotted tail in TEXT[LO,OFFSET) whose tail is a #+/#-
+   conditional, or NIL.
+
+   SBCL's reader treats such a tail specially: a not-taken #- branch
+   hands its target's elements to the enclosing list and a following
+   not-taken #+ branch is discarded, so the two forms end up
+   contributing different things. The standard is unambiguous that `.`
+   is followed by exactly one form and then `)`, and the behaviour is not
+   self-consistent anyway (two consecutive not-taken #- branches are an
+   error while one is not, and #+ and #- disagree for the same absent
+   feature), so it is reported rather than guessed at. Requiring
+   whitespace on both sides keeps `1.5` and friends out of the way."
+  (let ((site nil))
+    (loop for i from (max 0 (1- lo)) below (min offset (length text))
+          do (when (and (char= (char text i) #\.)
+                        (or (= i lo)
+                            (member (char text (1- i))
+                                    '(#\Space #\Tab #\Newline #\Return)))
+                        (< (1+ i) (length text))
+                        (member (char text (1+ i))
+                                '(#\Space #\Tab #\Newline #\Return))
+                        (let ((j (1+ i)))
+                          (loop while (and (< j (length text))
+                                           (member (char text j)
+                                                   '(#\Space #\Tab
+                                                     #\Newline #\Return)))
+                                do (incf j))
+                          (when (and (< (1+ j) (length text))
+                                     (char= (char text j) #\#)
+                                     (member (char text (1+ j)) '(#\+ #\-)))
+                            (setf site i))))))
+      site))
+
+(defun parse-error-message (condition text lo)
+  "One line describing a failed parse. When the failure is a dotted tail
+   taken by a #+/#- conditional, say so: the reported position is the
+   conditional that follows it, which is rarely where the problem is."
+  (let* ((report (princ-to-string condition))
+         (loc (extract-error-location report))
+         (compact (if loc
+                      (format nil "Syntax error at ~a"
+                              (subseq loc 1 (1- (length loc))))
+                      (first-line report)))
+         (offset (and loc (error-offset report))))
+    (if (and offset (dotted-tail-conditional-site text lo offset))
+        (format nil "~a: a dotted tail here is taken by a #+/#- conditional. This reader requires `.` to be followed by exactly one form and then `)`; move the conditional forms out of the dotted tail (for example list them as sibling forms) rather than depending on how a particular reader folds a skipped branch into the enclosing list."
+                compact)
+        compact)))
+
 (defun compact-parse-error (condition)
   "One-line summary of an esrap parse error.
    Esrap's full report enumerates every grammar alternative across many
@@ -1172,7 +1222,7 @@
     (esrap:esrap-parse-error (c)
       (values nil
               (make-node :error
-                         :value (compact-parse-error c)
+                         :value (parse-error-message c text lo)
                          :start lo
                          :end hi)))
     ;; A numeric literal can be well formed and still have no value in

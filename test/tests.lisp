@@ -217,6 +217,42 @@
         (is (and reported (<= 0 reported (length text)))
             (format nil "error position ~a outside 0..~a" reported (length text)))))))
 
+;;; --- Diagnosing a dotted tail taken by a reader conditional ---
+;;;;
+;;; Some readers fold a not-taken #+/#- branch into the enclosing list
+;;; when it sits in a dotted tail. This one requires the standard shape,
+;;; so such a file is refused -- but the reported offset is the
+;;; conditional that FOLLOWS the tail, which can be many lines away from
+;;; the cause, so the error names the construct instead.
+
+(defun error-value (text)
+  (node-value (parse-lisp-source text)))
+
+(test dotted-tail-conditional-is-named-in-the-error
+  (dolist (text '("(a b . #-no-such-feature (c d) #+no-such-feature ())"
+                  "(f (x) . #-no-such-feature (y z) #+no-such-feature ())"))
+    (let ((message (error-value text)))
+      (is (search "dotted tail" message)
+          (format nil "~s should name the construct, got: ~a" text message))
+      (is (search "followed by exactly one form" message)))))
+
+(test ordinary-syntax-errors-are-not-mislabelled
+  (dolist (text '("(defun f (x)" "(a . b . c)" "(. b)" "(a .)" "#(a . b)"
+                  "(a 1 2" "\"unterminated"))
+    (let ((message (error-value text)))
+      (is (null (search "dotted tail" message))
+          (format nil "~s must keep the plain message, got: ~a" text message)))))
+
+(test the-dotted-tail-diagnostic-does-not-fire-on-decimals-or-comments
+  ;; a dot between numbers, or inside a comment that mentions one, is not
+  ;; a dotted tail
+  (dolist (text '("(list 1.5 2.5)"
+                  "(f .5 5. .6)"
+                  ";; a . #+ note~%(a b)"
+                  "(a . b)"))
+    (is (null (search "dotted tail" (error-value text)))
+        (format nil "~s must not be mislabelled" text))))
+
 (test out-of-range-numbers-are-rejected-not-signalled
   ;; 1e542 is well formed but has no single-float value, and the reader
   ;; rejects it (READER-IMPOSSIBLE-NUMBER-ERROR). The arithmetic error
