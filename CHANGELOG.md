@@ -145,8 +145,16 @@ pinned by the test suite, so a later change cannot quietly break them.
 ### Tests
 
 - FiveAM 139 -> 290 checks (reader regressions, balance/format,
-  single/batch edit ops, match-ambiguity policies, move directions).
-
+  single/batch edit ops, match-ambiguity policies, move directions),
+  then to 549 with lint rules (schema, portability, redefinition,
+  empty-operator, eval hazards), rename/wrap/unwrap spans and batch ops,
+  and batch error annotation, then to 1053 with the span invariants,
+  formatter round trip, edit-operation properties, the machine-output
+  contract and bounded rejection.
+- CLI matrix 62 -> 102 checks, then to 120 with lint JSON/rules,
+  format --check, rename/wrap/unwrap, and batch rename/wrap paths, then
+  to 124 with the positional-FILE argument; format 21 -> 26; bugfix
+  18 -> 22.
 - **Reader coverage from a 455-file/17-lib sweep (alexandria, babel,
   trivia, iterate, cffi, hunchentoot, ...): 3 parse errors + 3
   balance disagreements, all fixed, sweep now fully clean.**
@@ -169,17 +177,6 @@ pinned by the test suite, so a later change cannot quietly break them.
 - **`offset-to-line-col-inverse` clamped OOB positions to EOF**,
   silently appending on bad `--line/--col`: now signals, and edit
   commands fail loudly (insert/text still allows the exact EOF spot).
-
-### Tests
-
-- FiveAM 139 -> 290 checks (reader regressions, balance/format,
-  single/batch edit ops, match-ambiguity policies, move directions),
-  then to 549 with lint rules (schema, portability, redefinition,
-  empty-operator, eval hazards), rename/wrap/unwrap spans and batch
-  ops, and batch error annotation.
-- CLI matrix 62 -> 102 checks, then to 120 with lint JSON/rules,
-  format --check, rename/wrap/unwrap, and batch rename/wrap paths;
-  format 21 -> 26; bugfix 18 -> 22.
 
 ## [0.5.3] - 2026-08-24
 
