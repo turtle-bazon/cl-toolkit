@@ -154,6 +154,69 @@
   (is (= 0.001d0 (node-value (parse-single-number "1d-3"))))
   (is (= 1.0e10 (node-value (parse-single-number "1e10")))))
 
+;;; --- Chunked scanning must not go quadratic ---
+;;;;
+;;; Source is handed to esrap in chunks whose ends esrap confirms are
+;;; form boundaries. When a chunk does not parse, the next candidate
+;;; extends the range -- but on a file with a genuine syntax error no
+;;; candidate ever succeeds, and re-reading the same prefix once per
+;;; remaining candidate made rejecting a 170 KB file take 25 s. The same
+;;; failure reported over a wider range means the text is broken there,
+;;; so scanning steps past it instead.
+
+(defun repeated-stray-paren-source (&optional (n 120))
+  "N well-formed top-level forms followed by one unbalanced form: the
+   shape that used to stall the chunk scan."
+  (concatenate 'string
+               (format nil "~{~a~%~}" (make-list n
+                                                 :initial-element "(defun ok () 1)"))
+               "(defun broken ("))
+
+(test broken-text-is-rejected-in-bounded-time
+  (let* ((text (repeated-stray-paren-source))
+         (start (get-internal-real-time))
+         (ast (parse-lisp-source text))
+         (elapsed (/ (- (get-internal-real-time) start)
+                      internal-time-units-per-second)))
+    (is (eq :error (node-type ast))
+        "a file with an unbalanced form must be an error root")
+    ;; the linear scan rejects this in well under a second; the quadratic
+    ;; one needed tens of seconds for a file of this size
+    (is (< elapsed 10)
+        (format nil "rejecting ~a characters took ~as" (length text) elapsed))))
+
+(test a-truncated-candidate-is-extended-not-treated-as-broken
+  ;; whitespace alone does not prove a form boundary: the cut can land
+  ;; between #+sbcl and its argument, which is a truncation, not damage
+  ;; each entry is the source and how many top-level forms it has
+  (dolist (entry '(("#+sbcl (defun f () 1)" . 1)
+                  ("#+(or sbcl ccl) (defun f () 1)" . 1)
+                  ("#+sbcl (a) (b)" . 2)
+                  ("(a . (b c))" . 1)
+                  ("(a b . (c))" . 1)
+                  ("(col . nil)" . 1)))
+    (let ((ast (parse-lisp-source (car entry))))
+      (is (eq :list (node-type ast))
+          (format nil "~s must still parse after the chunking change"
+                  (car entry)))
+      (is (= (cdr entry) (length (list-top-level ast)))
+          (format nil "~s must keep its top-level form count" (car entry))))))
+
+(test a-really-broken-file-reports-the-first-error
+  (let* ((text (concatenate 'string "(defun good () 1)~%"
+                             (repeated-stray-paren-source 20)))
+         (ast (parse-lisp-source text)))
+    (is (eq :error (node-type ast)))
+    ;; the reported position must be inside the file, not past its end
+    (let* ((message (node-value ast))
+           (idx (search "Position " message)))
+      (is (plusp (or idx 0)) "the error message must name a position")
+      (let ((reported (and idx (parse-integer message
+                                            :start (+ idx 9)
+                                            :junk-allowed t))))
+        (is (and reported (<= 0 reported (length text)))
+            (format nil "error position ~a outside 0..~a" reported (length text)))))))
+
 (test out-of-range-numbers-are-rejected-not-signalled
   ;; 1e542 is well formed but has no single-float value, and the reader
   ;; rejects it (READER-IMPOSSIBLE-NUMBER-ERROR). The arithmetic error

@@ -1197,32 +1197,88 @@
                          :start lo
                          :end hi)))))
 
+(defun error-offset (report)
+  "The absolute character offset named by an esrap error REPORT, or NIL
+   when the report carries no \"Position N\" fragment."
+  (let ((idx (search "Position " report)))
+    (when idx
+      ;; the digits run to the end of the message, so JUNK-ALLOWED is what
+      ;; stops the parse rather than a delimiter
+      (ignore-errors (parse-integer report :start (+ idx 9) :junk-allowed t)))))
+
+(defun next-cut-after (cuts offset limit)
+  "The first candidate end strictly beyond OFFSET, or LIMIT."
+  (or (find-if (lambda (c) (> c offset)) cuts) limit))
+
 (defun parse-forms-from (text lo text-end cuts)
   "Collect the forms of TEXT from LO to TEXT-END.
    CUTS are ascending candidate end offsets from `scan-source'.  Each
    candidate is accepted only when esrap parses the whole range as
-   complete forms; when one does not, POS stays put and the next
-   candidate extends the range, because whitespace alone does not
-   prove a form boundary (the space in \"#+sbcl (a)\" precedes the
-   macro's argument).  Whatever is left after the last candidate is
-   parsed as one final range.
+   complete forms; when one does not, the next candidate extends the
+   range, because whitespace alone does not prove a form boundary (the
+   space in \"#+sbcl (a)\" precedes the macro's argument).  Whatever is
+   left after the last candidate is parsed as one final range.
+
+   A range that fails to parse must not be retried from the same start
+   once per remaining candidate: on a file with a genuine syntax error
+   no candidate ever succeeds, so that re-read the same text over and
+   over and rejecting a 170 KB file took 25 s.
+
+   A failure is not by itself proof that the text is broken, though: a
+   range that ends mid-form fails too, and that is resolved by extending
+   to the next candidate. The two are told apart by WHERE the failure
+   is. Extend the range while the reported failure moves forward with
+   its end (truncation); once the same failure is reported over a wider
+   range (the text is broken at that offset), step POS past it. Either
+   way the first error is what gets reported, as before.
    Returns (values forms error-node)."
   (let ((forms '())
         (error-node nil)
         (pos lo))
-    (dolist (cand cuts)
-      (unless (or error-node (<= cand pos))
-        (multiple-value-bind (nodes err) (parse-chunk text pos cand)
-          (when (null err)
-            (dolist (node nodes) (push node forms))
-            (setf pos cand)))))
-    (unless (or error-node (>= pos text-end))
-      (multiple-value-bind (nodes err) (parse-chunk text pos text-end)
-        (if (null err)
-            (progn
-              (dolist (node nodes) (push node forms))
-              (setf pos text-end))
-            (setf error-node err))))
+    ;; BROKEN is set only when a range is abandoned as unparseable rather
+    ;; than merely truncated: a transient failure is not an error, since
+    ;; the next candidate usually covers the whole form.
+    (let ((broken nil)
+          (stall-offset nil)
+          (stall-limit nil))
+      (dolist (cand cuts)
+        (when (> cand pos)
+          (multiple-value-bind (nodes err) (parse-chunk text pos cand)
+            (if (null err)
+                (progn
+                  (dolist (node nodes) (push node forms))
+                  (setf pos cand
+                        stall-offset nil
+                        stall-limit nil))
+                (let ((off (or (error-offset (cl-toolkit-ast::node-value err))
+                               -1)))
+                  (if (and stall-offset
+                           (eql off stall-offset)
+                           (> cand stall-limit))
+                      ;; the same failure over a wider range: the text is
+                      ;; broken there, so stop re-reading the prefix and
+                      ;; carry on past it. When the report names no offset
+                      ;; the failed range itself is skipped, which still
+                      ;; moves forward.
+                      (progn
+                        (unless broken (setf broken err))
+                        (setf pos (next-cut-after
+                                   cuts (if (plusp off) off cand)
+                                   text-end)
+                              stall-offset nil
+                              stall-limit nil))
+                      ;; the failure moved forward with the end of the
+                      ;; range: the range was simply too short
+                      (setf stall-offset off
+                            stall-limit cand)))))))
+      ;; Whatever is left, including the case where nothing was skipped.
+      (unless (>= pos text-end)
+        (multiple-value-bind (nodes err) (parse-chunk text pos text-end)
+          (cond ((null err)
+                 (dolist (node nodes) (push node forms))
+                 (setf pos text-end))
+                (t (setf error-node err)))))
+      (setf error-node (or error-node broken)))
     (values (nreverse forms) error-node)))
 
 (defun parse-lisp-source (text &optional (start 0) end)
