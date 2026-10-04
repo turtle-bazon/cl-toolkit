@@ -26,6 +26,10 @@ pinned by the test suite, so a later change cannot quietly break them.
 - **Fuzzing**: 100000 generated inputs (random token soup, random
   well-formed forms) produce no crash, no span violation, no
   nondeterminism and no format round-trip failure.
+- **Bounded rejection**: a file with a syntax error is refused in time
+  proportional to its size, and the reported position is inside the
+  file. A truncated candidate (a cut landing mid-form, as in
+  `#+sbcl (a)`) is still extended rather than treated as damage.
 - **Machine output**: the parse node and lint diagnostic shapes are
   checked against the documented keys and types, rendering is
   byte-identical across runs, and deeply nested or unterminated input
@@ -84,11 +88,19 @@ pinned by the test suite, so a later change cannot quietly break them.
   literals outright, so the file is unreadable either way. `1e308` is
   rejected while `1d308` parses, because `e` selects the default single
   format and `d` selects double.
-- Rejecting an invalid file can take far longer than accepting it,
-  because a list that fails to parse is re-read by the dotted-list
-  rule before the failure is reported. The largest case measured,
-  a 174 KB file that neither parser accepts, takes about 25 s to
-  reject.
+- Rejecting a file with a syntax error no longer takes far longer than
+  accepting one. Source is parsed in chunks whose ends esrap confirms
+  are form boundaries, and a chunk that fails is retried against a
+  longer range, because a cut can land mid-form. On a file that is
+  genuinely broken no candidate ever succeeds, so the scan re-read the
+  same growing prefix once per remaining candidate: a 174 KB file took
+  25 s to reject, with 123 failed attempts over the same text. The
+  scan now distinguishes the two cases by where the failure is reported
+  -- moving forward with the range end means the range was too short,
+  staying put means the text is broken there, and the scan steps past
+  it. That file is rejected in 1.7 s, the same as it takes to accept
+  `asdf.lisp`, and the reported position is more accurate (it names
+  the actual stray paren). No file in the corpus is now slow to parse.
 
 ### Added
 
