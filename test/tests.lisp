@@ -270,6 +270,39 @@
       (is (eq :list (node-type ast))
           (format nil "~a must still parse" text))))))
 
+(test unrepresentable-literal-is-located-not-just-reported
+  ;; The coercion happens inside a rule transform, so esrap never sees an
+  ;; offset and the report used to span the whole chunk with no position
+  ;; at all. The literal itself must be named, the way a syntax error
+  ;; names its offset.
+  (let* ((text "(defun f () (list 1e542))")
+         (off (search "1e542" text))
+         (ast (parse-lisp-source text)))
+    (is (eq :error (node-type ast)))
+    (is (= off (node-start ast))
+        "the error node must start at the literal, not at the chunk")
+    (is (= 5 (- (node-end ast) (node-start ast)))
+        "and must cover exactly the literal")
+    (is (search "Position 18" (node-value ast))
+        (format nil "position missing from ~s" (node-value ast)))
+    (is (search "Line 1, Column 19" (node-value ast))
+        (format nil "line/col missing from ~s" (node-value ast)))))
+
+(test first-error-is-reported-not-the-last
+  ;; Two unrepresentable literals: the earlier one is the answer worth
+  ;; giving. The final range used to overwrite the failure already
+  ;; recorded, which sent the report to the end of the file.
+  (let* ((text "(defun a () (list 1e542))\n(defun b () (list 1d400))\n")
+         (ast (parse-lisp-source text)))
+    (is (eq :error (node-type ast)))
+    (is (= (search "1e542" text) (node-start ast))
+        "the first bad literal must win, not the last"))
+  ;; and the same holds when the first failure is a syntax error
+  (let ((ast (parse-lisp-source "#\\Foobar\n(defun h ()\n")))
+    (is (eq :error (node-type ast)))
+    (is (search "Line 1" (node-value ast))
+        (format nil "expected the line 1 failure, got ~s" (node-value ast)))))
+
 (test slash-is-symbol-when-not-a-ratio
   (dolist (text '("3/-4" "-3/-4" "3.5/2"))
     (let ((node (first (node-children (parse-lisp-source text)))))

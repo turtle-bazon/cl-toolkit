@@ -37,6 +37,21 @@ pinned by the test suite, so a later change cannot quietly break them.
 
 ### Fixed
 
+- **An unrepresentable numeric literal is located, not just reported.**
+  `1e542` overflows a single float inside a rule transform, and a
+  transform signals rather than failing the rule, so esrap never reports
+  an offset. The error node therefore spanned the whole chunk and its
+  message named no position at all -- for a long range, no help. The
+  offending literal is now isolated by re-parsing each candidate token on
+  its own with the same rules, so the diagnosis cannot drift from the
+  grammar, and the report reads "Number has no value in this float format
+  at Line 15001, Column 21, Position 529094". A file with two such
+  literals reports the first.
+- **The first parse error is reported, not the last.** The final range of
+  a scan overwrote a failure already recorded, so a file whose line 1 has
+  a stray paren and whose tail is unterminated was reported at the tail,
+  sending an editor to the end of the file to fix something wrong at the
+  top. This contradicted `parse-forms-from`'s own docstring.
 - **Numbers follow the reader.** Only the `e` exponent marker was
   recognized, so `1d0`, `1f0`, `1s0` and `1l0` read as symbols, and
   every radix integer read as a symbol (`#xFF` was the symbol `#xFF`,
@@ -148,7 +163,7 @@ pinned by the test suite, so a later change cannot quietly break them.
   single/batch edit ops, match-ambiguity policies, move directions),
   then to 549 with lint rules (schema, portability, redefinition,
   empty-operator, eval hazards), rename/wrap/unwrap spans and batch ops,
-  and batch error annotation, then to 1053 with the span invariants,
+  and batch error annotation, then to 1062 with the located-literal and first-error checks,
   formatter round trip, edit-operation properties, the machine-output
   contract and bounded rejection.
 - CLI matrix 62 -> 102 checks, then to 120 with lint JSON/rules,

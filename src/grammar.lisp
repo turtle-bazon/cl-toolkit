@@ -1210,6 +1210,55 @@
              :start start
              :end end))
 
+(defun number-token-start-p (text i hi)
+  "True when a numeric literal can begin at index I of TEXT, below HI:
+   a digit, a dot followed by a digit, or a sign followed by either."
+  (and (< i hi)
+       (let ((c (char text i)))
+         (or (digit-char-p c)
+             (and (char= c #\.)
+                  (< (1+ i) hi)
+                  (digit-char-p (char text (1+ i))))
+             (and (member c '(#\+ #\-))
+                  (< (1+ i) hi)
+                  (or (digit-char-p (char text (1+ i)))
+                      (and (char= (char text (1+ i)) #\.)
+                           (< (+ i 2) hi)
+                           (digit-char-p (char text (+ i 2))))))))))
+
+(defun number-token-end (text i hi)
+  "Index just past the literal-ish token beginning at I. Generous on
+   purpose -- it only has to cover 1e542 and 1.5f342, and the grammar
+   decides what the text actually means."
+  (loop while (and (< i hi)
+                   (let ((c (char text i)))
+                     (or (alphanumericp c) (find c "(.-+/"))))
+        do (incf i)
+        finally (return i)))
+
+(defun locate-unrepresentable-literal (text lo hi)
+  "Return (values start end) for the numeric literal in TEXT[LO,HI) that
+parses but has no value in the float format its exponent marker selects,
+or (values NIL NIL) when there is none.
+
+A transform signals rather than failing the rule, so the position is lost
+by the time it surfaces. Each candidate token is re-parsed on its own
+with the same rules, so this cannot disagree with the grammar about which
+text is a literal or what it means; an ARITHMETIC-ERROR on a lone token is
+therefore that literal and nothing else."
+  (loop for i from lo below hi
+        when (number-token-start-p text i hi)
+        do (let ((end (number-token-end text i hi)))
+             (when (> end i)
+               ;; Deliberately not parse-chunk: this runs inside its
+               ;; handler, and a nested esrap:parse cannot recurse back.
+               (handler-case
+                   (esrap:parse 'source-file text :start i :end end)
+                 (arithmetic-error () (return-from locate-unrepresentable-literal
+                                     (values i end)))
+                 (error () nil)))))
+  (values nil nil))
+
 (defun parse-chunk (text lo hi)
   "Parse TEXT[LO,HI) as one strict `source-file' match.
    Returns (values nodes error-node).  Error-node is NIL on success and
@@ -1231,21 +1280,37 @@
     ;; ARITHMETIC-ERROR raised inside a rule transform is not an esrap
     ;; parse error, so it would otherwise escape the parser; the file is
     ;; just as unreadable either way, so report it the same way.
+    ;;
+    ;; The transform signals, so esrap never reports where, and the chunk
+    ;; bounds say only "somewhere in here" -- which for a long range is no
+    ;; help at all. Isolate the literal instead and name it, the way a
+    ;; syntax error names its offset.
     (arithmetic-error (c)
       (declare (ignore c))
-      (values nil
-              (make-node :error
-                         :value "Number has no value in this float format"
-                         :start lo
-                         :end hi)))
+      (multiple-value-bind (start end) (locate-unrepresentable-literal text lo hi)
+        (let ((start (or start lo))
+              (end (or end hi)))
+          (multiple-value-bind (line col) (cl-toolkit-ast:offset-to-line-col text start)
+            (values nil
+                    (make-node :error
+                               :value (format nil
+                                              "Number has no value in this float format at Line ~d, Column ~d, Position ~d"
+                                              (1+ line) (1+ col) start)
+                               :start start
+                               :end end))))))
     ;; Any other condition from a rule transform is still "this text is
     ;; not something we can parse", never a reason to unwind the caller.
+    ;; The cause is not known, so the range is the honest answer -- but
+    ;; say where the range starts, since silence about position is what
+    ;; made this worth fixing above.
     (error (c)
-      (values nil
-              (make-node :error
-                         :value (format nil "Cannot parse: ~a" c)
-                         :start lo
-                         :end hi)))))
+      (multiple-value-bind (line col) (cl-toolkit-ast:offset-to-line-col text lo)
+        (values nil
+                (make-node :error
+                           :value (format nil "Cannot parse: ~a (from Line ~d, Column ~d, Position ~d)"
+                                          c (1+ line) (1+ col) lo)
+                           :start lo
+                           :end hi))))))
 
 (defun error-offset (report)
   "The absolute character offset named by an esrap error REPORT, or NIL
@@ -1327,7 +1392,13 @@
           (cond ((null err)
                  (dolist (node nodes) (push node forms))
                  (setf pos text-end))
-                (t (setf error-node err)))))
+                ;; The first failure is the one worth reporting, as the
+                ;; docstring says: a file whose line 1 has a stray paren
+                ;; and whose tail is unterminated used to be reported at
+                ;; the tail, sending an editor to the end of the file to
+                ;; fix something that is wrong at the top. Do not let this
+                ;; last range displace a failure already recorded.
+                (t (unless broken (setf error-node err))))))
       (setf error-node (or error-node broken)))
     (values (nreverse forms) error-node)))
 
