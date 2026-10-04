@@ -93,12 +93,6 @@ pinned by the test suite, so a later change cannot quietly break them.
   the error now names the construct instead of pointing at the
   conditional that follows the tail, which is where the offset used to
   land.
-- An out-of-range numeric literal (`1e542`, `1e400`, `1d400`) is
-  reported as a parse error rather than raising
-  `FLOATING-POINT-OVERFLOW` out of the parser. The reader rejects these
-  literals outright, so the file is unreadable either way. `1e308` is
-  rejected while `1d308` parses, because `e` selects the default single
-  format and `d` selects double.
 - Rejecting a file with a syntax error no longer takes far longer than
   accepting one. Source is parsed in chunks whose ends esrap confirms
   are form boundaries, and a chunk that fails is retried against a
