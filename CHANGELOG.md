@@ -75,24 +75,6 @@ pinned by the test suite, so a later change cannot quietly break them.
   that per level. `quicklisp/asdf.lisp` went from not finishing in
   45 s to 1.7 s, the same as before the split.
 
-### Known divergences
-
-- A dotted tail followed by a `#-`/`#+` form that the reader never
-  reads (`(f (a b . #-no-such-feature (x y) #+no-such-feature ()))`)
-  is read by SBCL as if the vanished branch contents were spliced into
-  the enclosing list. cl-toolkit rejects it, which is what the
-  standard's grammar for `.` requires. Two corpus files rely on it
-  (SBCL's `frlock.lisp` and `ir1-translators.lisp`).
-
-  This is not reproduced on purpose. The reader's behaviour is not
-  self-consistent: a single not-taken `#-` branch contributes its
-  target's elements, a following not-taken `#-` branch is an error,
-  a following not-taken `#+` branch is silently discarded, and `#-`
-  and `#+` disagree for the same absent feature -- so there is no rule
-  to state, let alone implement. Since the file is refused either way,
-  the error now names the construct instead of pointing at the
-  conditional that follows the tail, which is where the offset used to
-  land.
 - An out-of-range numeric literal (`1e542`, `1e400`, `1d400`, `1e308`,
   `1.5f342`) is reported as a parse error instead of raising
   `FLOATING-POINT-OVERFLOW` out of the parser. Coercing the literal to
@@ -117,6 +99,24 @@ pinned by the test suite, so a later change cannot quietly break them.
   `asdf.lisp`, and the reported position is more accurate (it names
   the actual stray paren). No file in the corpus is now slow to parse.
 
+### Known divergences
+
+- A dotted tail followed by a `#-`/`#+` form that the reader never
+  reads (`(f (a b . #-no-such-feature (x y) #+no-such-feature ()))`)
+  is read by SBCL as if the vanished branch contents were spliced into
+  the enclosing list. cl-toolkit rejects it, which is what the
+  standard's grammar for `.` requires. Two corpus files rely on it
+  (SBCL's `frlock.lisp` and `ir1-translators.lisp`).
+
+  This is not reproduced on purpose. The reader's behaviour is not
+  self-consistent: a single not-taken `#-` branch contributes its
+  target's elements, a following not-taken `#-` branch is an error,
+  a following not-taken `#+` branch is silently discarded, and `#-`
+  and `#+` disagree for the same absent feature -- so there is no rule
+  to state, let alone implement. Since the file is refused either way,
+  the error now names the construct instead of pointing at the
+  conditional that follows the tail, which is where the offset used to
+  land.
 ### Added
 
 - **Lint as a rule registry with stable machine output.** Diagnostics
