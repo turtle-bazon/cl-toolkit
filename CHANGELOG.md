@@ -81,7 +81,18 @@ pinned by the test suite, so a later change cannot quietly break them.
   reads (`(f (a b . #-no-such-feature (x y) #+no-such-feature ()))`)
   is read by SBCL as if the vanished branch contents were spliced into
   the enclosing list. cl-toolkit rejects it, which is what the
-  standard's grammar for `.` requires. Two corpus files rely on it.
+  standard's grammar for `.` requires. Two corpus files rely on it
+  (SBCL's `frlock.lisp` and `ir1-translators.lisp`).
+
+  This is not reproduced on purpose. The reader's behaviour is not
+  self-consistent: a single not-taken `#-` branch contributes its
+  target's elements, a following not-taken `#-` branch is an error,
+  a following not-taken `#+` branch is silently discarded, and `#-`
+  and `#+` disagree for the same absent feature -- so there is no rule
+  to state, let alone implement. Since the file is refused either way,
+  the error now names the construct instead of pointing at the
+  conditional that follows the tail, which is where the offset used to
+  land.
 - An out-of-range numeric literal (`1e542`, `1e400`, `1d400`) is
   reported as a parse error rather than raising
   `FLOATING-POINT-OVERFLOW` out of the parser. The reader rejects these
